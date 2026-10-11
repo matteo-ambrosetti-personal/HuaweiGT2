@@ -14,7 +14,7 @@ Huawei offers no free API for personal use, so data gets in three ways:
 | Path | What it brings | Automation | Cost |
 |---|---|---|---|
 | **Huawei privacy export** (ZIP + password) | Full history: workouts with GPS, steps, heart rate, sleep, SpO2, stress | Manual: request, download, drop into the page | Free |
-| **Health Sync → Google Drive** | New workouts (GPX/TCX) and daily health CSVs | Automatic | Small one-time fee for the Android app |
+| **Health Sync → Google Drive** | New days of steps, heart rate and SpO2 (per-minute CSVs); workouts as GPX/TCX when enabled | Automatic: read through the Google Drive connector when the page opens (at most hourly) or on **Sync now** | Small one-time fee for the Android app |
 | **intervals.icu + GT2 Bridge** | New activities with GPS/HR, daily wellness | Automatic | Free (Cloudflare Workers free tier) |
 
 ## Privacy
@@ -25,6 +25,7 @@ Huawei offers no free API for personal use, so data gets in three ways:
   - Other people who can open the artifact cannot read it.
   - Claude can read it when you ask, in a conversation or through the page's Ask Claude panel.
 - **No other services:** nothing is sent to any other service. Exports are offered through the platform's download prompt.
+- **Google Drive:** the page may only call the connector's read tools `search_files` and `download_file_content`, as you, after you allow it once. It reads only files in folders named "Health Sync …".
 
 ## Using it
 
@@ -40,10 +41,10 @@ Before the first import the page shows clearly labelled **sample data** generate
 
 ```sh
 npm install
-npm test            # unit tests (parsers, merge rules, statistics, GPX/TCX)
+npm test            # unit tests (parsers, merge rules, statistics, GPX/TCX, Drive sync against a fake connector)
 npm run fixture     # synthetic AES-encrypted export → test/fixtures/out/ (password test1234)
 npm run build       # → dist/gt2-logbook.html (the published artifact)
-npm run test:e2e    # Chromium: imports the fixture, visits every tab, saves screenshots/
+npm run test:e2e    # Chromium: imports the fixture, visits every tab, syncs from a fake Drive, saves screenshots/
 npm run lint
 ```
 
@@ -53,6 +54,7 @@ npm run lint
 | `src/lib/huawei/` | Export parsers (format notes: [docs/huawei-export-format.md](docs/huawei-export-format.md)) |
 | `src/lib/model.js` | The normalised dataset and source precedence (export > intervals.icu > Health Sync) |
 | `src/app/` | The page: storage on the artifact `db`, importer, views, d3 charts, Ask Claude, exports |
+| `src/app/sync-drive.js` | Health Sync → Google Drive sync (file index, change detection, per-minute merge) |
 | `bridge/` | The GT2 Bridge Cloudflare Worker (an OAuth-protected MCP connector for intervals.icu) |
 
 d3 7.9.0 and zip.js 2.8.61 load from pinned CDN URLs at runtime. Everything else is inlined by `scripts/build.mjs`.

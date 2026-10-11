@@ -6,7 +6,7 @@ import { JsonArrayStream, parseLenient, parseArrayText } from '../lib/json-strea
 import { createHuaweiImporter } from '../lib/huawei/index.js';
 import { classifyEntry } from '../lib/huawei/entries.js';
 import { generateExport } from '../lib/sample/generate.js';
-import { parseActivityFile, parseDailyCsv } from '../lib/healthsync.js';
+import { parseActivityFile, parseDailyCsv, parseSampleCsv, samplesFragment } from '../lib/healthsync.js';
 import { emptyDataset, mergeDataset } from '../lib/model.js';
 
 let imp = null;
@@ -90,9 +90,19 @@ self.onmessage = (e) => {
         const frag = emptyDataset();
         const out = emptyDataset();
         const report = { parsed: 0, skipped: [] };
-        for (const file of m.files) {
+        const samples = []; // per-minute Health Sync CSVs, unioned below
+        for (const [i, file] of m.files.entries()) {
           const lower = file.name.toLowerCase();
           if (lower.endsWith('.csv')) {
+            const s = parseSampleCsv(file.text);
+            if (s.metric) {
+              if (!s.rows.length) report.skipped.push({ name: file.name, reason: 'no rows' });
+              else {
+                samples.push({ metric: s.metric, rows: s.rows, m: i });
+                report.parsed++;
+              }
+              continue;
+            }
             const { days, nights, columns } = parseDailyCsv(file.text);
             if (!Object.keys(days).length && !Object.keys(nights).length) {
               report.skipped.push({ name: file.name, reason: 'no recognised columns', columns: Object.keys(columns) });
@@ -114,6 +124,7 @@ self.onmessage = (e) => {
           if (res.track) frag.tracks[res.workout.id] = res.track;
           report.parsed++;
         }
+        for (const [date, row] of Object.entries(samplesFragment(samples))) Object.assign((frag.days[date] ||= {}), row);
         mergeDataset(out, frag, m.source);
         self.postMessage({ type: 'done', dataset: out, diag: report });
         break;

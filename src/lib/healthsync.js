@@ -1,9 +1,16 @@
 // Health Sync → Google Drive files.
 //
-// Health Sync writes activity files (GPX/TCX/FIT, plus a CSV summary) and
-// daily health CSVs to a Drive folder. Activity files are standard formats;
-// the CSV column names are matched by synonyms because the exact layout is
-// confirmed against the user's real files (Phase B, see docs/setup-health-sync.md).
+// Health Sync writes one Drive folder per data type ("Health Sync Passi",
+// "Health Sync Freq. cardiaca", … in the phone's language). Health data comes
+// as per-minute CSVs (layout verified on real files, Oct 2026; values here are made up):
+//   Data,Orario,Passi                       2026.03.07 08:00:00,08:00:00,40
+//   Data,Orario,Frequenza cardiaca,Origine  2026.03.07 08:10:00,08:10:00,64,
+//   Data,Orario,Saturazione di ossigeno     2026.03.07 03:00:00,03:00:00,97.0
+// one row per non-empty minute, local wall-clock time, in daily files
+// ("<type> YYYY.MM.DD Huawei Health.csv") and weekly history files
+// ("<type> WW-YYYY Huawei Health.csv") that can cover the same day.
+// Activity files are standard GPX/TCX. Daily-summary CSVs are matched by
+// column synonyms (parseDailyCsv).
 
 import { parseGpx, parseTcx, workoutFromFile } from './gpx.js';
 import { analyzeSeries } from './track.js';
@@ -148,4 +155,188 @@ export function parseDailyCsv(text) {
     }
   }
   return { days, nights, columns: cols, header };
+}
+
+// ------------------------------------------------------------ per-minute samples
+
+const SAMPLE_DATE = ['data', 'date', 'datetime', 'date time', 'timestamp'];
+const SAMPLE_TIME = ['orario', 'ora', 'time'];
+/** Value column names (Italian as observed, English) → metric. */
+export const SAMPLE_METRICS = {
+  steps: ['passi', 'steps', 'step count'],
+  hr: ['frequenza cardiaca', 'heart rate', 'bpm'],
+  spo2: ['saturazione di ossigeno', 'oxygen saturation', 'blood oxygen', 'spo2'],
+};
+export const SAMPLE_LABELS = { steps: 'steps', hr: 'heart rate', spo2: 'SpO2' };
+
+const normHeader = (s) => String(s).toLowerCase().replace(/\(.*?\)/g, ' ').replace(/[_\s]+/g, ' ').trim();
+
+function sampleColumns(header) {
+  const names = header.map(normHeader);
+  const date = names.findIndex((n) => SAMPLE_DATE.includes(n));
+  if (date < 0) return null;
+  const time = names.findIndex((n) => SAMPLE_TIME.includes(n));
+  for (let i = 0; i < names.length; i++) {
+    if (i === date || i === time) continue;
+    const metric = Object.keys(SAMPLE_METRICS).find((m) => SAMPLE_METRICS[m].includes(names[i]));
+    if (metric) return { metric, date: header[date], time: time >= 0 ? header[time] : null, value: header[i] };
+  }
+  return null;
+}
+
+const YMD = /^(\d{4})[./-](\d{1,2})[./-](\d{1,2})(?:[ T]+(\d{1,2}):(\d{2})(?::(\d{2}))?)?/;
+const DMY = /^(\d{1,2})[./-](\d{1,2})[./-](\d{4})(?:[ T]+(\d{1,2}):(\d{2})(?::(\d{2}))?)?/;
+const HMS = /^(\d{1,2}):(\d{2})(?::(\d{2}))?/;
+
+/**
+ * Local wall-clock cell(s) → {day: "YYYY-MM-DD", sec: seconds since midnight | null}.
+ * Year-first or day-first dates with . - / separators; the time comes from the
+ * date cell or, failing that, from a separate time cell. Null when invalid.
+ */
+export function parseWallClock(dateText, timeText) {
+  const s = String(dateText ?? '').trim();
+  let y, mo, d, hh, mi, ss, m;
+  if ((m = YMD.exec(s))) [, y, mo, d, hh, mi, ss] = m;
+  else if ((m = DMY.exec(s))) [, d, mo, y, hh, mi, ss] = m;
+  else return null;
+  const Y = Number(y), M = Number(mo), D = Number(d);
+  const check = new Date(Date.UTC(Y, M - 1, D));
+  if (check.getUTCFullYear() !== Y || check.getUTCMonth() !== M - 1 || check.getUTCDate() !== D) return null;
+  const day = `${y}-${String(M).padStart(2, '0')}-${String(D).padStart(2, '0')}`;
+  if (hh == null && timeText) {
+    const t = HMS.exec(String(timeText).trim());
+    if (t) [, hh, mi, ss] = t;
+  }
+  if (hh == null) return { day, sec: null };
+  const H = Number(hh), Mi = Number(mi), S = Number(ss || 0);
+  if (H > 23 || Mi > 59 || S > 59) return null;
+  return { day, sec: H * 3600 + Mi * 60 + S };
+}
+
+/**
+ * Parse a per-minute sample CSV → {metric, header, rows: [{day, sec, v}]}.
+ * metric is null when the columns are not recognised, or when no row has a
+ * time of day (then it is a daily summary: use parseDailyCsv).
+ */
+export function parseSampleCsv(text) {
+  const { header, records } = csvObjects(text);
+  const cols = sampleColumns(header);
+  if (!cols) return { metric: null, header, rows: [] };
+  const rows = [];
+  let untimed = 0;
+  for (const r of records) {
+    const at = parseWallClock(r[cols.date], cols.time ? r[cols.time] : null);
+    const v = toNumber(r[cols.value]);
+    if (!at || v == null) continue;
+    if (at.sec == null) { untimed++; continue; }
+    rows.push({ day: at.day, sec: at.sec, v });
+  }
+  if (!rows.length && untimed) return { metric: null, header, rows: [] };
+  return { metric: cols.metric, header, rows };
+}
+
+/** First and last day of parsed rows, or nulls. */
+export function rowsRange(rows) {
+  let a = null, b = null;
+  for (const r of rows) {
+    if (a == null || r.day < a) a = r.day;
+    if (b == null || r.day > b) b = r.day;
+  }
+  return [a, b];
+}
+
+/**
+ * Union the rows of several files of one metric → Map(day → Map(sec → value)).
+ * Files are applied oldest first (`m` = modified time), so for the same
+ * minute the newest file wins; overlapping files never double count.
+ * `days` (a Set) limits the result to those days.
+ */
+export function unionSamples(files, days = null) {
+  const perDay = new Map();
+  for (const f of [...files].sort((x, y) => (x.m || 0) - (y.m || 0))) {
+    for (const r of f.rows) {
+      if (days && !days.has(r.day)) continue;
+      let samples = perDay.get(r.day);
+      if (!samples) perDay.set(r.day, (samples = new Map()));
+      samples.set(r.sec, r.v);
+    }
+  }
+  return perDay;
+}
+
+function sampleDay(metric, samples) {
+  if (metric === 'steps') {
+    let steps = 0, activeMin = 0, n = 0;
+    const hourly = new Array(24).fill(0);
+    for (const [sec, v] of samples) {
+      if (!(v >= 0)) continue;
+      steps += v;
+      hourly[Math.floor(sec / 3600)] += v;
+      if (v >= 60) activeMin++;
+      n++;
+    }
+    return n ? { steps: Math.round(steps), stepsHourly: hourly.map(Math.round), activeMin } : null;
+  }
+  if (metric === 'hr') {
+    let min = Infinity, max = -Infinity, sum = 0, n = 0;
+    const hourSum = new Array(24).fill(0), hourN = new Array(24).fill(0);
+    for (const [sec, v] of samples) {
+      if (!(v >= 25 && v <= 230)) continue;
+      if (v < min) min = v;
+      if (v > max) max = v;
+      sum += v;
+      n++;
+      const h = Math.floor(sec / 3600);
+      hourSum[h] += v;
+      hourN[h]++;
+    }
+    if (!n) return null;
+    return {
+      hrMin: Math.round(min), hrMax: Math.round(max), hrAvg: Math.round(sum / n), hrN: n,
+      hrHourly: hourSum.map((s, i) => (hourN[i] ? Math.round(s / hourN[i]) : null)),
+    };
+  }
+  if (metric === 'spo2') {
+    let min = Infinity, sum = 0, n = 0;
+    for (const v of samples.values()) {
+      if (!(v >= 70 && v <= 100)) continue;
+      if (v < min) min = v;
+      sum += v;
+      n++;
+    }
+    return n ? { spo2Avg: Math.round((sum / n) * 10) / 10, spo2Min: Math.round(min) } : null;
+  }
+  return null;
+}
+
+/** Map(day → Map(sec → value)) of one metric → {date → day-row fields}. */
+export function samplesToDays(metric, perDay) {
+  const out = {};
+  for (const [day, samples] of perDay) {
+    const row = sampleDay(metric, samples);
+    if (row) out[day] = row;
+  }
+  return out;
+}
+
+/**
+ * Parsed sample files [{metric, rows, m}] of any metrics → {date → row}.
+ * `onlyDays` (Map metric → Set of days) limits what is computed.
+ */
+export function samplesFragment(files, onlyDays = null) {
+  const byMetric = new Map();
+  for (const f of files) {
+    if (!SAMPLE_METRICS[f.metric]) continue;
+    if (!byMetric.has(f.metric)) byMetric.set(f.metric, []);
+    byMetric.get(f.metric).push(f);
+  }
+  const days = {};
+  for (const [metric, list] of byMetric) {
+    const want = onlyDays ? onlyDays.get(metric) : null;
+    if (onlyDays && !want?.size) continue;
+    for (const [date, row] of Object.entries(samplesToDays(metric, unionSamples(list, want)))) {
+      Object.assign((days[date] ||= {}), row);
+    }
+  }
+  return days;
 }

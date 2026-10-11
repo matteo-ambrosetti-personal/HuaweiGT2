@@ -19,8 +19,9 @@ import { renderSleep } from './views/sleep.js';
 import { renderHeart } from './views/heart.js';
 import { renderRecords } from './views/records.js';
 import { renderAsk } from './views/ask.js';
-import { renderData } from './views/data.js';
+import { renderData, renderDriveCard } from './views/data.js';
 import { rangeText } from './views/common.js';
+import { syncDrive as runDriveSync, DRIVE, driveErrorCopy, protectPruned } from './sync-drive.js';
 
 const VIEWS = {
   overview: renderOverview,
@@ -121,6 +122,78 @@ const actions = {
     return summary;
   },
 
+  /** Pull new Health Sync files from Google Drive (button, or automatic when allowed). */
+  syncDrive({ auto = false } = {}) {
+    if (driveRun) return driveRun;
+    const mcp = state.runtime?.mcp;
+    if (!mcp) {
+      setDrive({ status: 'unavailable' });
+      return Promise.resolve(null);
+    }
+    if (auto) lastAutoSync = Date.now();
+    driveRun = (async () => {
+      const before = state.drive.status;
+      setDrive({ busy: true, progress: null, error: null });
+      try {
+        const call = async (tool, input) => (await mcp.callTool(DRIVE, tool, input, { cache: false })).payload;
+        const res = await runDriveSync({ call, index: state.syncIndex, onProgress: (p) => setDrive({ progress: p }) });
+        const frag = res.fragment;
+        const changed = Object.keys(frag.days).length + Object.keys(frag.nights).length + Object.keys(frag.workouts).length > 0;
+        const now = new Date().toISOString();
+        let saved = { error: null };
+        if (changed) {
+          const base = state.isSample ? emptyDataset() : state.ds;
+          protectPruned(frag, base, res.index.prunedBefore);
+          const tracks = frag.tracks || {};
+          mergeDataset(base, frag, 'healthsync');
+          base.tracks = {};
+          const meta = state.isSample ? { ...defaultMeta(), settings: state.meta.settings || {} } : state.meta;
+          meta.sources = { ...(meta.sources || {}), healthsync: driveSource(meta.sources?.healthsync, res, now) };
+          const cache = state.isSample ? {} : state.tracks;
+          Object.assign(cache, tracks);
+          update({ ds: base, meta, isSample: false, tracks: cache });
+          if (state.route === 'data') renderChips();
+          else render();
+          saved = await persist(tracks, null, { quiet: true });
+        } else if (!state.isSample) {
+          state.meta.sources = { ...(state.meta.sources || {}), healthsync: driveSource(state.meta.sources?.healthsync, res, now) };
+          await state.store.saveMeta(state.meta).catch(() => {});
+        }
+        // The index (with its cursor) is stored only once the days are: a failed
+        // save re-reads the same files next time. Routes that did not fit are not blocking.
+        if (!saved.error || saved.tracksSkipped) {
+          update({ syncIndex: res.index });
+          await state.store.saveSyncIndex(res.index).catch(() => {});
+        }
+        const status = res.report.folders ? 'ready' : 'nofolders';
+        setDrive({ busy: false, progress: null, status, perm: 'granted', report: res.report, error: null });
+        const r = res.report;
+        if (changed) toast(`Health Sync: ${r.days ? `${r.days} day${r.days === 1 ? '' : 's'}` : ''}${r.days && r.workouts ? ' and ' : ''}${r.workouts ? `${r.workouts} workout${r.workouts === 1 ? '' : 's'}` : ''} updated.`);
+        else if (!auto) toast(status === 'nofolders' ? 'No Health Sync folders in your Google Drive yet.' : 'Health Sync is up to date.');
+        return res.report;
+      } catch (e) {
+        if (e?.code === 'user_changed') return null; // the runtime replaces the page
+        const copy = driveErrorCopy(e);
+        setDrive({ busy: false, progress: null, error: copy, status: copy?.status && copy.status !== 'error' ? copy.status : before });
+        if (copy && !auto && state.route !== 'data') toast(`${copy.title}. See Data → Automatic updates.`, 5000);
+        return null;
+      } finally {
+        driveRun = null;
+      }
+    })();
+    return driveRun;
+  },
+
+  async openPermissions() {
+    try {
+      if (!state.runtime?.permissions) throw new Error('no permissions panel');
+      await state.runtime.permissions.manage();
+    } catch {
+      toast("Open this artifact's Permissions menu to allow Google Drive.", 5000);
+    }
+    await checkDrive();
+  },
+
   async saveSettings(patch) {
     const meta = state.meta;
     meta.settings = { ...(meta.settings || {}), ...patch };
@@ -155,7 +228,7 @@ const actions = {
       toast('Some data could not be deleted. Try again.');
     }
     setBusy(null);
-    update({ ds: emptyDataset(), meta: defaultMeta(), tracks: {}, diag: null });
+    update({ ds: emptyDataset(), meta: defaultMeta(), tracks: {}, diag: null, syncIndex: null, drive: { ...state.drive, report: null, error: null } });
     await loadSample();
     location.hash = 'overview';
     render();
@@ -167,17 +240,92 @@ function setBusy(label, p) {
   renderChips();
 }
 
-async function persist(tracks, diag) {
-  if (state.store.kind !== 'cloud') return;
+// ------------------------------------------------------------------ Google Drive sync
+
+let driveRun = null;
+let lastAutoSync = 0;
+const AUTO_SYNC_MS = 60 * 60000;
+
+function setDrive(patch) {
+  update({ drive: { ...state.drive, ...patch } });
+  renderChips();
+  const card = document.getElementById('drive-card');
+  if (card) renderDriveCard(card, viewCtx());
+}
+
+/** meta.sources.healthsync after a sync: when, what it covered, what the last run did. */
+function driveSource(prev, res, at) {
+  const range = datasetRange(res.fragment);
+  const from = [prev?.range?.from, range?.from].filter(Boolean).sort()[0];
+  const to = [prev?.range?.to, range?.to].filter(Boolean).sort().at(-1);
+  return { at, ...(from ? { range: { from, to } } : {}), last: { files: res.report.read, days: res.report.days, workouts: res.report.workouts } };
+}
+
+/**
+ * Work out what the Drive card can offer and, when Google Drive is already
+ * allowed for this page, sync automatically (at most hourly). Never asks for
+ * consent by itself: a first sync needs the button.
+ */
+async function checkDrive({ auto = false } = {}) {
+  const { mcp, permissions } = state.runtime || {};
+  if (!mcp) return setDrive({ status: 'unavailable', error: null });
+  let perm = 'prompt';
+  try {
+    if (permissions) perm = await permissions.state(`mcp:${DRIVE}`);
+  } catch {
+    perm = 'prompt';
+  }
+  let status = perm === 'granted' ? 'ready' : perm === 'denied' ? 'denied' : 'prompt';
+  try {
+    const listed = await mcp.listTools(DRIVE);
+    const server = (listed?.servers || []).find((s) => s.server === DRIVE);
+    if (!server || (Array.isArray(server.tools) && !server.tools.length)) status = 'missing';
+    else if (server.authStatus === 'needs_reauth') status = 'reauth';
+  } catch (e) {
+    const copy = driveErrorCopy(e);
+    if (copy) return setDrive({ status: copy.status, error: copy });
+  }
+  if (!state.drive.busy) {
+    // An access problem from an earlier attempt is stale once the connector checks out again.
+    const accessError = ['reauth', 'missing', 'denied', 'choose', 'approval', 'unavailable'].includes(state.drive.error?.status);
+    let error = state.drive.error;
+    if (status === 'denied') error = driveErrorCopy({ code: 'not_in_manifest' });
+    else if ((status === 'ready' || status === 'prompt') && accessError) error = null;
+    setDrive({ status, perm, error });
+  }
+  const last = Date.parse(state.meta.sources?.healthsync?.at || '');
+  const due = !Number.isFinite(last) || Date.now() - last > AUTO_SYNC_MS;
+  if (auto && status === 'ready' && due && Date.now() - lastAutoSync > AUTO_SYNC_MS) actions.syncDrive({ auto: true });
+}
+
+document.addEventListener('visibilitychange', () => {
+  if (document.visibilityState === 'visible' && !state.loading && state.runtime) checkDrive({ auto: true });
+});
+
+// ------------------------------------------------------------------ saving
+
+let saving = Promise.resolve();
+
+/** Save the dataset (one save at a time). Resolves with the store's result. */
+function persist(tracks, diag, opts) {
+  const run = saving.then(() => persistNow(tracks, diag, opts));
+  saving = run.catch(() => {});
+  return run;
+}
+
+async function persistNow(tracks, diag, { quiet = false } = {}) {
+  if (state.store.kind !== 'cloud') return { error: null };
   setBusy('Saving', { done: 0, total: 1 });
   try {
     const res = await state.store.save(state.ds, state.meta, { tracks, onProgress: (p) => setBusy('Saving', p) });
     if (diag) await state.store.saveDiag(diag).catch(() => {});
     if (res.error?.code === 'quota_exceeded') toast('Storage is full: some routes stay only in this session. Summaries are saved.', 6000);
     else if (res.error) toast(`Some data was not saved (${res.error.code || 'error'}). It is still shown; try importing again later.`, 6000);
-    else toast('Saved to your private storage.');
+    else if (!quiet) toast('Saved to your private storage.');
+    return res;
   } catch (e) {
     toast(`Saving failed (${e?.code || 'error'}). Your data is shown but not stored yet.`, 6000);
+    return { error: e || { code: 'error' } };
   } finally {
     setBusy(null);
   }
@@ -204,6 +352,10 @@ function renderChips() {
       h('span', { class: 'dot' }), `${SOURCE_LABELS[src] || src}${to ? ` · to ${fmtDate(to, { short: true })}` : ''}`));
   }
   if (state.store?.kind === 'memory' && !state.isSample) el.append(h('span', { class: 'chip warn' }, h('span', { class: 'dot' }), 'Not saved in this view'));
+  if (state.drive?.busy) {
+    const p = state.drive.progress;
+    el.append(h('span', { class: 'chip', id: 'drive-chip' }, h('span', { class: 'dot' }), p?.total ? `Drive sync ${p.done}/${p.total}` : 'Drive sync…'));
+  }
   if (state.busy) {
     const pct = state.busy.total ? Math.round((state.busy.done / state.busy.total) * 100) : null;
     el.append(h('span', { class: 'chip' }, h('span', { class: 'dot' }), `${state.busy.label}${pct != null ? ` ${pct}%` : '…'}`));
@@ -275,19 +427,9 @@ function renderTabs() {
   }
 }
 
-export function render() {
-  renderTabs();
-  renderChips();
-  renderBanner();
-  renderFilters();
-  const view = $('view');
-  clear(view);
-  if (state.loading) {
-    view.append(h('p', { class: 'loading', text: 'Loading your logbook…' }));
-    return;
-  }
+function viewCtx() {
   const range = currentRange();
-  const ctx = {
+  return {
     ds: state.ds,
     meta: state.meta,
     diag: state.diag,
@@ -299,12 +441,27 @@ export function render() {
     runtime: state.runtime,
     store: state.store,
     param: state.param,
+    drive: state.drive,
+    syncIndex: state.syncIndex,
     actions,
     getAskCtx: () => ({ ds: state.ds, settings: settings(), isSample: state.isSample }),
     takeFlash: () => { const f = state.flash; state.flash = null; return f; },
   };
+}
+
+export function render() {
+  renderTabs();
+  renderChips();
+  renderBanner();
+  renderFilters();
+  const view = $('view');
+  clear(view);
+  if (state.loading) {
+    view.append(h('p', { class: 'loading', text: 'Loading your logbook…' }));
+    return;
+  }
   try {
-    VIEWS[state.route](view, ctx);
+    VIEWS[state.route](view, viewCtx());
   } catch (err) {
     console.error(err);
     view.append(h('div', { class: 'msg err' }, h('strong', { text: 'This view could not be drawn' }), String(err?.message || err)));
@@ -337,11 +494,12 @@ async function boot() {
     loaded = await store.load();
     toast('Your private storage could not be reached; changes will not be saved in this view.', 6000);
   }
-  update({ meta: loaded.meta, diag: loaded.diag });
+  update({ meta: loaded.meta, diag: loaded.diag, syncIndex: loaded.syncIndex || null });
   if (isEmpty(loaded.ds)) await loadSample();
   else update({ ds: loaded.ds, isSample: false });
   update({ loading: false });
   render();
+  await checkDrive({ auto: true });
 }
 
 boot().catch((err) => {

@@ -2,8 +2,9 @@
 // viewer's private subtree data/users/<uid>/ (invisible to other viewers).
 // MemoryStore is the fallback when db is unavailable (local copy, signed out).
 //
-// Layout: meta · diag · days-YYYY-MM · wk-YYYY-MM · sleep-YYYY-MM, plus
-// tracks/items/<workoutId>. Only documents whose content hash changed are written.
+// Layout: meta · diag · hsync (Drive sync index) · days-YYYY-MM · wk-YYYY-MM ·
+// sleep-YYYY-MM, plus tracks/items/<workoutId>. Only month documents whose
+// content hash changed are written.
 
 import { emptyDataset } from '../lib/model.js';
 import { decodePolyline, encodePolyline } from '../lib/geo.js';
@@ -138,15 +139,17 @@ export class CloudStore {
     const snap = await withRetry(() => this.db.collection(this.base).limit(1000).get());
     let meta = defaultMeta();
     let diag = null;
+    let syncIndex = null;
     const parts = [];
     for (const doc of snap.docs) {
       const data = doc.data();
       if (!data) continue;
       if (doc.id === 'meta') meta = { ...defaultMeta(), ...data };
       else if (doc.id === 'diag') diag = data;
+      else if (doc.id === 'hsync') syncIndex = data;
       else parts.push(data);
     }
-    return { ds: docsToDataset(parts), meta, diag };
+    return { ds: docsToDataset(parts), meta, diag, syncIndex };
   }
 
   async loadTrack(id) {
@@ -162,6 +165,13 @@ export class CloudStore {
   async saveDiag(diag) {
     const body = JSON.stringify(diag).length > MAX_DOC ? { note: 'too large', at: diag.at } : diag;
     await withRetry(() => this.db.doc(`${this.base}/diag`).set(clean(body)));
+  }
+
+  /** The Drive sync index (kept small by fitIndex in sync-drive.js). */
+  async saveSyncIndex(index) {
+    const body = clean(index);
+    if (JSON.stringify(body).length > MAX_DOC) throw Object.assign(new Error('Sync index too large'), { code: 'invalid_argument' });
+    await withRetry(() => this.db.doc(`${this.base}/hsync`).set(body));
   }
 
   /**
@@ -218,7 +228,7 @@ export class CloudStore {
 
   /** Delete every stored document of this viewer. */
   async clear(meta, onProgress = () => {}) {
-    const ids = [...Object.keys(meta.hashes || {}), 'diag', 'meta'];
+    const ids = [...Object.keys(meta.hashes || {}), 'diag', 'hsync', 'meta'];
     const trackIds = Object.keys(meta.tracks || {});
     const total = ids.length + trackIds.length;
     let done = 0;
@@ -252,20 +262,28 @@ export class MemoryStore {
   }
 
   async load() {
-    if (!this.state) return { ds: emptyDataset(), meta: defaultMeta(), diag: null };
-    return structuredClone(this.state);
+    if (!this.state) return { ds: emptyDataset(), meta: defaultMeta(), diag: null, syncIndex: null };
+    return { syncIndex: null, ...structuredClone(this.state) };
   }
 
   async loadTrack(id) {
     return this.trackStore[id] || null;
   }
 
+  #base() {
+    return this.state || { ds: emptyDataset(), meta: defaultMeta(), diag: null, syncIndex: null };
+  }
+
   async saveMeta(meta) {
-    this.state = { ...(this.state || { ds: emptyDataset(), diag: null }), meta: structuredClone(meta) };
+    this.state = { ...this.#base(), meta: structuredClone(meta) };
   }
 
   async saveDiag(diag) {
-    this.state = { ...(this.state || { ds: emptyDataset(), meta: defaultMeta() }), diag: structuredClone(diag) };
+    this.state = { ...this.#base(), diag: structuredClone(diag) };
+  }
+
+  async saveSyncIndex(index) {
+    this.state = { ...this.#base(), syncIndex: structuredClone(index) };
   }
 
   async save(ds, meta, { tracks = {}, onProgress = () => {} } = {}) {
@@ -278,7 +296,7 @@ export class MemoryStore {
       }
     }
     for (const [id, body] of datasetToDocs(ds)) meta.hashes[id] = hashString(JSON.stringify(body));
-    this.state = { ds: structuredClone(ds), meta: structuredClone(meta), diag: this.state?.diag ?? null };
+    this.state = { ...this.#base(), ds: structuredClone(ds), meta: structuredClone(meta) };
     onProgress({ done: 1, total: 1 });
     return { written: 0, tracksWritten: n, tracksSkipped: false, error: null };
   }

@@ -13,8 +13,10 @@ async function useCap(name) {
 
 /** Resolve the capabilities this page uses. Never throws. */
 export async function getRuntime() {
-  // Only capabilities this page declares: an undeclared one may take ~10 s to resolve null.
-  const [db, user, downloads, sample] = await Promise.all(['db', 'user', 'downloads', 'sample'].map(useCap));
+  // Only capabilities this page declares (an undeclared one may take ~10 s to
+  // resolve null), plus the built-in `permissions`.
+  const names = ['db', 'user', 'downloads', 'sample', 'mcp', 'permissions'];
+  const [db, user, downloads, sample, mcp, permissions] = await Promise.all(names.map(useCap));
   let uid = null;
   if (user) {
     try {
@@ -23,5 +25,5 @@ export async function getRuntime() {
       uid = null;
     }
   }
-  return { db, user, uid, downloads, sample, mcp: null, inViewer: Boolean(window.claude) };
+  return { db, user, uid, downloads, sample, mcp, permissions, inViewer: Boolean(window.claude) };
 }

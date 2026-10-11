@@ -19,6 +19,10 @@ export const state = {
   tracks: {}, // id → track cache (session)
   busy: null, // {label, done, total}
   storageNote: null,
+  // Google Drive (Health Sync) sync: status checking|unavailable|prompt|ready|denied|missing|reauth|…,
+  // busy while running, progress {phase, done, total}, error {status, title, text, action?}, report.
+  drive: { status: 'checking', busy: false, progress: null, error: null, report: null },
+  syncIndex: null, // the stored Drive sync index (doc "hsync")
 };
 
 export function settings() {

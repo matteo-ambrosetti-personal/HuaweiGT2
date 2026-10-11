@@ -2,11 +2,93 @@ import { h, section, clear, toast } from '../ui.js';
 import { fmtDate, fmtInt } from '../../lib/format.js';
 import { SOURCE_LABELS, datasetRange } from '../../lib/model.js';
 import { estimateMaxHr } from '../../lib/stats.js';
+import { skippedFolders } from '../sync-drive.js';
 
 function guide(title, steps, open = false) {
   return h('details', { class: 'guide', open },
     h('summary', { text: title }),
     h('ol', { class: 'steps-list', style: { marginTop: '8px' } }, steps.map((s) => h('li', null, ...s))));
+}
+
+const when = (iso) => new Date(iso).toLocaleString('en-GB', { dateStyle: 'medium', timeStyle: 'short' });
+const plural = (n, word) => `${fmtInt(n)} ${word}${n === 1 ? '' : 's'}`;
+
+function driveChip(d, hs) {
+  if (d.busy) return { cls: '', text: 'Syncing…' };
+  switch (d.status) {
+    case 'checking': return { cls: '', text: 'Checking…' };
+    case 'unavailable': return { cls: '', text: 'Unavailable here' };
+    case 'prompt': return { cls: '', text: 'Ready to connect' };
+    case 'missing': return { cls: 'warn', text: 'Not connected' };
+    case 'reauth': return { cls: 'warn', text: 'Reconnect' };
+    case 'denied': return { cls: 'warn', text: 'Not allowed' };
+    case 'choose': return { cls: 'warn', text: 'Choose connector' };
+    case 'approval': return { cls: 'warn', text: 'Needs approval' };
+    case 'blocked': return { cls: 'bad', text: 'Blocked' };
+    case 'nofolders': return { cls: 'warn', text: 'No files yet' };
+    default:
+      if (d.error) return { cls: 'bad', text: 'Sync failed' };
+      return hs?.at ? { cls: 'ok', text: 'Connected' } : { cls: 'ok', text: 'Allowed' };
+  }
+}
+
+function progressText(p) {
+  if (!p || p.phase === 'folders') return 'Looking for Health Sync folders…';
+  if (p.phase === 'list') return 'Listing new files…';
+  return `Reading files ${fmtInt(p.done)} of ${fmtInt(p.total)}…`;
+}
+
+/** The "Google Drive · Health Sync" card; main.js redraws it in place while syncing. */
+export function renderDriveCard(el, ctx) {
+  clear(el);
+  const d = ctx.drive || {};
+  const hs = ctx.meta?.sources?.healthsync;
+  const chip = driveChip(d, hs);
+  el.append(h('div', { class: 'section-head' },
+    h('h3', { class: 'chart-title', text: 'Google Drive · Health Sync' }),
+    h('span', { class: `chip ${chip.cls}`, id: 'drive-status' }, h('span', { class: 'dot' }), chip.text)));
+  el.append(h('p', { style: { margin: 0 }, text: 'Automatic: the Health Sync app copies your Huawei Health data into Google Drive, and this page reads it through the Google Drive connector, when you open it (at most hourly) or press Sync now.' }));
+
+  if (d.status === 'unavailable') el.append(h('p', { class: 'muted', style: { margin: 0 }, text: 'Connectors cannot be used in this view. Open the logbook on claude.ai to sync from Google Drive.' }));
+  if (d.status === 'nofolders' && !d.error) el.append(h('div', { class: 'msg' }, h('strong', { text: 'No Health Sync folders found' }), 'Google Drive has no folders named "Health Sync …" yet. Check that Health Sync uses Google Drive as a destination and has synced once.'));
+  if (d.error) el.append(h('div', { class: 'msg err', id: 'drive-error' }, h('strong', { text: d.error.title }), d.error.text));
+  if (d.busy) el.append(h('p', { class: 'muted', style: { margin: 0 }, text: progressText(d.progress) }));
+  else if (hs?.at) {
+    const r = d.report;
+    const parts = [`Last sync ${when(hs.at)}`];
+    if (r) {
+      parts.push(`${plural(r.read, 'file')} read`);
+      parts.push(r.days || r.workouts ? `${[r.days ? plural(r.days, 'day') : '', r.workouts ? plural(r.workouts, 'workout') : ''].filter(Boolean).join(' and ')} updated${r.metrics?.length ? ` (${r.metrics.join(', ')})` : ''}` : 'nothing new');
+      if (r.failed) parts.push(`${plural(r.failed, 'file')} could not be read and will be retried`);
+    }
+    if (hs.range?.to) parts.push(`data up to ${fmtDate(hs.range.to)}`);
+    el.append(h('p', { class: 'muted', style: { margin: 0 }, id: 'drive-summary', text: `${parts.join(' · ')}.` }));
+  }
+
+  const skipped = skippedFolders(ctx.syncIndex);
+  if (skipped.length) {
+    el.append(h('div', { class: 'msg' }, h('strong', { text: 'Not used yet' }),
+      ...skipped.map((s) => h('div', { text: `${s.folder}: ${plural(s.n, 'file')}${s.header ? ` (columns: ${s.header})` : s.reason ? ` (${s.reason})` : ''}` })),
+      h('div', { class: 'muted', text: 'Ask Claude to add support for these once they appear.' })));
+  }
+
+  const row = h('div', { class: 'btn-row' });
+  if (d.status !== 'unavailable' && d.status !== 'blocked' && d.status !== 'checking') {
+    row.append(h('button', { class: 'btn primary', type: 'button', id: 'drive-sync', disabled: Boolean(d.busy), onclick: () => ctx.actions.syncDrive() },
+      d.busy ? 'Syncing…' : d.status === 'prompt' ? 'Connect and sync' : 'Sync now'));
+  }
+  if (d.status === 'denied' || d.error?.action === 'permissions') {
+    row.append(h('button', { class: 'btn', type: 'button', onclick: () => ctx.actions.openPermissions() }, 'Open permissions'));
+  }
+  if (d.status === 'prompt' && !d.busy) row.append(h('span', { class: 'muted', text: 'claude.ai asks once to let this page read Google Drive.' }));
+  if (row.childNodes.length) el.append(row);
+
+  el.append(guide('Set it up', [
+    ['On your Android phone install ', h('b', { text: 'Health Sync' }), ' (one-week trial, then a small one-time fee).'],
+    ['Choose ', h('b', { text: 'Huawei Health' }), ' as the source and ', h('b', { text: 'Google Drive' }), ' as the destination. Enable steps, heart rate and SpO2; activities (GPX/TCX) and sleep are optional.'],
+    ['In claude.ai open ', h('b', { text: 'Settings → Connectors' }), ' and connect ', h('b', { text: 'Google Drive' }), '.'],
+    ['Press ', h('b', { text: 'Connect and sync' }), ' here and allow Google Drive. From then on the logbook syncs by itself when you open it.'],
+  ], !hs?.at && d.status !== 'ready'));
 }
 
 export function renderData(root, ctx) {
@@ -101,15 +183,8 @@ export function renderData(root, ctx) {
   const srcCard = (title, state, body) => h('div', { class: 'panel span-6', style: { display: 'flex', flexDirection: 'column', gap: '10px' } },
     h('div', { class: 'section-head' }, h('h3', { class: 'chart-title', text: title }), h('span', { class: `chip ${state.cls}` }, h('span', { class: 'dot' }), state.text)),
     ...body);
-  const drive = srcCard('Google Drive · Health Sync', { cls: '', text: 'Not connected yet' }, [
-    h('p', { style: { margin: 0 }, text: 'Automatic: the Health Sync app copies new workouts (GPX/TCX) and daily health CSVs from Huawei Health into Google Drive, and this page reads them through the Google Drive connector.' }),
-    guide('Set it up', [
-      ['On your Android phone install ', h('b', { text: 'Health Sync' }), ' (one-week trial, then a small one-time fee).'],
-      ['Choose ', h('b', { text: 'Huawei Health' }), ' as the source and ', h('b', { text: 'Google Drive' }), ' as the destination; enable activity files (GPX/TCX) and health data CSVs.'],
-      ['In claude.ai open ', h('b', { text: 'Settings → Connectors' }), ' and reconnect ', h('b', { text: 'Google Drive' }), '.'],
-      ['Tell Claude it is done: the sync button appears here once the connector is verified.'],
-    ]),
-  ]);
+  const drive = h('div', { class: 'panel span-6', id: 'drive-card', style: { display: 'flex', flexDirection: 'column', gap: '10px' } });
+  renderDriveCard(drive, ctx);
   const bridge = srcCard('intervals.icu · GT2 Bridge', { cls: '', text: 'Not connected yet' }, [
     h('p', { style: { margin: 0 }, text: 'Automatic and free: Huawei Health syncs to intervals.icu natively, and a small connector you deploy on Cloudflare (free tier) lets this page read it.' }),
     guide('Set it up', [
