@@ -1,0 +1,14 @@
+node_modules/
+.wrangler/
+bridge/node_modules/
+bridge/.dev.vars
+
+# Generated test output
+test/fixtures/out/
+test-results/
+screenshots/
+
+# Never commit real health data exports
+*.zip
+exports/
+HUAWEI_HEALTH_*/

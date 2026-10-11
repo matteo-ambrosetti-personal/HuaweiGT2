@@ -1,0 +1,22 @@
+{
+  // GT2 Bridge — deploy with Cloudflare Workers Builds (root directory: bridge)
+  // or `npx wrangler deploy` from this folder. See docs/setup-intervals-bridge.md.
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "gt2-bridge",
+  "main": "src/index.js",
+  "compatibility_date": "2026-09-15",
+  // Needed by the OAuth library to fetch client metadata documents safely.
+  "compatibility_flags": ["global_fetch_strictly_public"],
+  "kv_namespaces": [
+    {
+      "binding": "OAUTH_KV",
+      // Replace with your namespace id (Claude can create it for you).
+      "id": "REPLACE_WITH_KV_NAMESPACE_ID"
+    }
+  ],
+  "observability": { "enabled": true }
+  // Secrets (set in the dashboard or with `npx wrangler secret put`):
+  //   INTERVALS_API_KEY   intervals.icu → Settings → Developer
+  //   BRIDGE_PASSPHRASE   a long random phrase you type once when connecting
+  // Optional variable: INTERVALS_ATHLETE_ID (defaults to "0", the key's owner)
+}

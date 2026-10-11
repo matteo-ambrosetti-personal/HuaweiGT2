@@ -1,0 +1,47 @@
+<title>GT 2 Logbook</title>
+<meta name="description" content="Activity, workouts, sleep and heart data from a Huawei Watch GT 2.">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wdth,wght@112.5,600;112.5,700;112.5,800&family=IBM+Plex+Sans:wght@400;500;600&display=swap">
+<style>/*__CSS__*/</style>
+
+<header class="topbar">
+  <div class="topbar-inner">
+    <div class="brand-row">
+      <div class="brand">
+        <svg class="brand-mark" viewBox="0 0 26 26" aria-hidden="true">
+          <circle cx="13" cy="13" r="11" fill="none" stroke="currentColor" stroke-width="2.5"></circle>
+          <path d="M13 2 A11 11 0 0 1 23.6 15.8" fill="none" stroke="var(--accent)" stroke-width="2.5" stroke-linecap="round"></path>
+          <circle cx="13" cy="13" r="2.4" fill="currentColor"></circle>
+        </svg>
+        <h1>GT 2 Logbook</h1>
+        <span class="sub" id="brand-sub">Huawei Watch GT 2 · activity, sleep and heart</span>
+      </div>
+      <div class="status-chips" id="status-chips"><span class="chip"><span class="dot"></span>Loading…</span></div>
+    </div>
+    <nav class="tabs" id="tabs" aria-label="Sections">
+      <a class="tab" href="#overview" data-route="overview" aria-current="page">Overview</a>
+      <a class="tab" href="#activity" data-route="activity">Activity</a>
+      <a class="tab" href="#workouts" data-route="workouts">Workouts</a>
+      <a class="tab" href="#sleep" data-route="sleep">Sleep</a>
+      <a class="tab" href="#heart" data-route="heart">Heart &amp; health</a>
+      <a class="tab" href="#records" data-route="records">Records</a>
+      <a class="tab" href="#ask" data-route="ask">Ask Claude</a>
+      <a class="tab" href="#data" data-route="data">Data</a>
+    </nav>
+  </div>
+</header>
+
+<main id="main">
+  <div id="banner-slot"></div>
+  <div class="filters" id="filters"></div>
+  <div class="view" id="view">
+    <p class="loading">Loading your logbook…</p>
+  </div>
+</main>
+<footer class="foot" id="foot">Your data stays in this artifact's private storage. Charts are drawn in your browser.</footer>
+<div class="tip" id="tip" role="status" aria-live="polite"></div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/d3/7.9.0/d3.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@zip.js/zip.js@2.8.61/dist/zip-native.min.js"></script>
+<script>/*__JS__*/</script>
