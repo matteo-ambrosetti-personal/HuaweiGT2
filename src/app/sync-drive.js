@@ -11,12 +11,14 @@
 // title queries match by day and page irregularly, so they only find folders.
 // Result order is not reliable, so listings always run to the last page.
 //
-// Change detection: an index {fileId → [modifiedMs, kind, firstDay, lastDay]}
-// is kept in the private doc data/users/<uid>/hsync. Health Sync's daily and
-// weekly files can cover the same minutes, so a touched day is rebuilt from
-// every indexed file of that metric covering it, unioned minute by minute.
+// Change detection: an index {fileId → [modifiedMs, kind, firstDay, lastDay, extra]}
+// is kept in the private doc data/users/<uid>/hsync (extra: the data source of
+// a sample file, the folder of a skipped one). Health Sync's daily and weekly
+// files can cover the same minutes, so a touched day is rebuilt from every
+// indexed file of that metric covering it, unioned minute by minute within
+// each source; sources are never added together (samplesFragment).
 
-import { parseSampleCsv, samplesFragment, rowsRange, parseActivityFile, parseDailyCsv, SAMPLE_METRICS, SAMPLE_LABELS } from '../lib/healthsync.js';
+import { parseSampleCsv, samplesFragment, rowsRange, parseActivityFile, parseDailyCsv, sourceFromTitle, SAMPLE_METRICS, SAMPLE_LABELS, SAMPLE_FIELDS } from '../lib/healthsync.js';
 import { emptyDataset, METRIC_GROUPS } from '../lib/model.js';
 import { addDays } from '../lib/format.js';
 
@@ -32,9 +34,12 @@ const MARGIN_MS = 5 * 60000;
 const MAX_FILE_BYTES = 5e6;
 const MAX_SPAN_DAYS = 62;
 export const MAX_INDEX_BYTES = 200 * 1024;
+// Bumped when the way days are built changes: an older index is dropped, so the
+// next sync re-reads every file once (v2: sources kept apart, calories).
+export const INDEX_VERSION = 2;
 
 export function emptyIndex() {
-  return { kind: 'hsync', v: 1, cursor: null, folders: {}, files: {}, skipInfo: {}, prunedBefore: null, lastReport: null };
+  return { kind: 'hsync', v: INDEX_VERSION, cursor: null, folders: {}, files: {}, skipInfo: {}, prunedBefore: null, lastReport: null };
 }
 
 const isSample = (kind) => Object.prototype.hasOwnProperty.call(SAMPLE_METRICS, kind);
@@ -171,7 +176,7 @@ function parseFile(f, text) {
     const s = parseSampleCsv(text);
     if (s.metric) {
       const [a, b] = rowsRange(s.rows);
-      return { kind: s.metric, rows: s.rows, a, b };
+      return { kind: s.metric, rows: s.rows, a, b, source: sourceFromTitle(f.title) };
     }
     const d = parseDailyCsv(text);
     const keys = [...Object.keys(d.days), ...Object.keys(d.nights)].sort();
@@ -197,7 +202,7 @@ function parseFile(f, text) {
  *   is then changed. Unreadable single files are skipped and retried next time.
  */
 export async function syncDrive({ call, index: prevIndex, onProgress = () => {}, sleep = defaultSleep }) {
-  const prev = prevIndex?.kind === 'hsync' ? prevIndex : emptyIndex();
+  const prev = prevIndex?.kind === 'hsync' && prevIndex.v === INDEX_VERSION ? prevIndex : emptyIndex();
   const invoke = retrying(call, sleep);
   const fragment = emptyDataset();
   const report = { at: new Date().toISOString(), folders: 0, listed: 0, changed: 0, read: 0, days: 0, workouts: 0, metrics: [], failed: 0, truncated: false };
@@ -281,7 +286,7 @@ export async function syncDrive({ call, index: prevIndex, onProgress = () => {},
   await pool(needed, 3, async ([id, e]) => {
     try {
       const s = parseSampleCsv(await download(invoke, id));
-      if (s.metric === e[1]) union.push({ metric: s.metric, rows: s.rows, m: e[0] });
+      if (s.metric === e[1]) union.push({ metric: s.metric, rows: s.rows, m: e[0], source: e[4] || '' });
       report.read++;
     } catch (err) {
       if (err?.code !== 'tool_error' && err?.code !== 'bad_response') throw err;
@@ -301,7 +306,7 @@ export async function syncDrive({ call, index: prevIndex, onProgress = () => {},
     if (keep.size) want.set(metric, keep);
   }
   const sampleFiles = [...union];
-  for (const p of got.values()) if (isSample(p.kind)) sampleFiles.push({ metric: p.kind, rows: p.rows, m: p.m });
+  for (const p of got.values()) if (isSample(p.kind)) sampleFiles.push({ metric: p.kind, rows: p.rows, m: p.m, source: p.source });
   fragment.days = samplesFragment(sampleFiles, want);
 
   for (const p of got.values()) {
@@ -332,7 +337,9 @@ export async function syncDrive({ call, index: prevIndex, onProgress = () => {},
       pendingFrom = Math.min(pendingFrom, modMs(f));
       continue;
     }
-    index.files[f.id] = p.kind === 'skip' ? [p.m, 'skip', null, null, p.parent || null] : [p.m, p.kind, p.a ?? null, p.b ?? null];
+    if (p.kind === 'skip') index.files[f.id] = [p.m, 'skip', null, null, p.parent || null];
+    else if (isSample(p.kind)) index.files[f.id] = [p.m, p.kind, p.a ?? null, p.b ?? null, p.source || ''];
+    else index.files[f.id] = [p.m, p.kind, p.a ?? null, p.b ?? null];
   }
   for (const id of gone) delete index.files[id];
   report.failed += failed.size;
@@ -343,8 +350,9 @@ export async function syncDrive({ call, index: prevIndex, onProgress = () => {},
 
   report.days = Object.keys(fragment.days).length;
   report.workouts = Object.keys(fragment.workouts).length;
+  const dayRows = Object.values(fragment.days);
   report.metrics = [
-    ...[...want.keys()].map((m) => SAMPLE_LABELS[m]),
+    ...[...want.keys()].filter((m) => dayRows.some((r) => r[SAMPLE_FIELDS[m]] != null)).map((m) => SAMPLE_LABELS[m]),
     ...(report.workouts ? ['workouts'] : []),
     ...([...got.values()].some((p) => p.kind === 'daily') ? ['daily summaries'] : []),
   ];

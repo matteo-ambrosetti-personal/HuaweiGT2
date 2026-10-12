@@ -79,8 +79,8 @@ test('first sync reads every file and counts overlapping minutes once', async ()
   assert.equal(fragment.days['2026-03-07'].steps, 100);
   assert.equal(fragment.days['2026-03-08'].steps, 75); // 50 appears in both files
   assert.equal(fragment.days['2026-03-08'].hrAvg, 80);
-  assert.deepEqual(index.files.wk10.slice(1), ['steps', '2026-03-07', '2026-03-08']);
-  assert.deepEqual(index.files.d0308.slice(1), ['steps', '2026-03-08', '2026-03-08']);
+  assert.deepEqual(index.files.wk10.slice(1), ['steps', '2026-03-07', '2026-03-08', 'Huawei Health']);
+  assert.deepEqual(index.files.d0308.slice(1), ['steps', '2026-03-08', '2026-03-08', 'Huawei Health']);
   assert.equal(index.cursor, Date.parse('2026-03-08T20:02:00.000Z'));
   assert.deepEqual(report.metrics.sort(), ['heart rate', 'steps']);
   // the first listing has no time filter and folder ids are the only query input
@@ -227,4 +227,38 @@ test('each error code has its own copy', () => {
   assert.match(driveErrorCopy({ code: 'tool_error', message: 'Quota' }).text, /Quota/);
   assert.equal(driveErrorCopy({ code: 'something_new' }).status, 'error');
   assert.equal(decodeBase64Text(Buffer.from('Attività ✓', 'utf8').toString('base64')), 'Attività ✓');
+});
+
+test('watch and Health Connect files for the same day are not added together', async () => {
+  const files = weeklyAndDaily();
+  files.push(file('hc0308', STEPS, 'Passi 2026.03.08 Health Connect.csv', '2026-03-08T21:00:00.000Z', stepsCsv([
+    ['2026.03.08', '10:00:31', 900], ['2026.03.09', '07:00:12', 400],
+  ])));
+  files.push(file('kcal08', 'fEnergyFolder05', 'Energia bruciata 2026.03.08 Health Connect.csv', '2026-03-08T21:01:00.000Z',
+    'Data,Orario,Calorie attive,Calorie a riposo,Calorie totali\n2026.03.08 00:00:00,00:00:00,"0.0","0.0","0.0"\n'));
+  const drive = fakeDrive(files, { [STEPS]: 'Health Sync Passi', [HR]: 'Health Sync Freq. cardiaca', fEnergyFolder05: 'Health Sync Energia bruciata' });
+  const { fragment, index, report } = await syncDrive({ call: drive.call, index: null, sleep: noSleep });
+  assert.equal(fragment.days['2026-03-08'].steps, 75); // the watch's minutes only
+  assert.equal(fragment.days['2026-03-09'].steps, 400); // only Health Connect has this day
+  assert.equal(fragment.days['2026-03-08'].kcal, undefined); // all-zero calories store nothing
+  assert.equal(index.files.hc0308[4], 'Health Connect');
+  assert.equal(index.files.d0308[4], 'Huawei Health');
+  assert.equal(index.files.kcal08[1], 'kcal');
+  assert.deepEqual(skippedFolders(index), []); // calories files are understood, not "not used yet"
+  assert.ok(!report.metrics.includes('calories'));
+
+  // A later rewrite of the watch file keeps the Health Connect file apart.
+  drive.files.find((f) => f.id === 'd0308').modifiedTime = '2026-03-09T08:00:00.000Z';
+  const again = await syncDrive({ call: drive.call, index, sleep: noSleep });
+  assert.equal(again.fragment.days['2026-03-08'].steps, 75);
+});
+
+test('an index from an older version is rebuilt from scratch', async () => {
+  const drive = fakeDrive(weeklyAndDaily());
+  const first = await syncDrive({ call: drive.call, index: null, sleep: noSleep });
+  drive.reset();
+  const again = await syncDrive({ call: drive.call, index: { ...first.index, v: 1 }, sleep: noSleep });
+  assert.deepEqual(drive.downloads().sort(), ['d0308', 'h0308', 'wk10']);
+  assert.equal(again.fragment.days['2026-03-08'].steps, 75);
+  assert.equal(again.index.v, 2);
 });

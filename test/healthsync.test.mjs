@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { parseSampleCsv, parseWallClock, unionSamples, samplesToDays, samplesFragment, rowsRange } from '../src/lib/healthsync.js';
+import { parseSampleCsv, parseWallClock, unionSamples, samplesToDays, samplesFragment, rowsRange, sourceFromTitle } from '../src/lib/healthsync.js';
 
 // Synthetic files in the layout Health Sync writes to Google Drive.
 const csv = (header, rows) => [header, ...rows].join('\n') + '\n';
@@ -96,4 +96,43 @@ test('daily and weekly files covering the same minutes are counted once', () => 
   assert.deepEqual(Object.keys(only), ['2026-03-01']);
   assert.deepEqual(rowsRange(weekly.rows), ['2026-03-01', '2026-03-07']);
   assert.deepEqual(rowsRange([]), [null, null]);
+});
+
+test('the data source is read from Health Sync file names', () => {
+  assert.equal(sourceFromTitle('Passi 2026.03.07 Health Connect.csv'), 'Health Connect');
+  assert.equal(sourceFromTitle('Passi 10-2026 Huawei Health.csv'), 'Huawei Health');
+  assert.equal(sourceFromTitle('Freq. cardiaca 2026.03.07 Huawei Health.csv'), 'Huawei Health');
+  assert.equal(sourceFromTitle('Energia bruciata 2026.03.08 Health Connect.csv'), 'Health Connect');
+  assert.equal(sourceFromTitle('Run 2026-03-08.gpx'), '');
+  assert.equal(sourceFromTitle(undefined), '');
+});
+
+test('different sources are never added together; the watch wins', () => {
+  // Watch: per-minute rows. Health Connect: interval records on odd seconds.
+  const watch = parseSampleCsv(csv('Data,Orario,Passi', ['2026.03.07 08:00:00,08:00:00,40', '2026.03.07 08:01:00,08:01:00,60']));
+  const other = parseSampleCsv(csv('Data,Orario,Passi', ['2026.03.07 08:00:31,08:00:31,500', '2026.03.08 09:12:05,09:12:05,700', '2026.03.08 10:00:00,10:00:00,300']));
+  const files = [
+    { metric: 'steps', rows: other.rows, m: 2, source: 'Health Connect' },
+    { metric: 'steps', rows: watch.rows, m: 1, source: 'Huawei Health' },
+  ];
+  const days = samplesFragment(files);
+  assert.equal(days['2026-03-07'].steps, 100); // the watch's 100, not 600
+  assert.equal(days['2026-03-08'].steps, 1000); // no watch data that day: the other source fills it
+  // Without the watch, the source with more samples wins a day.
+  const two = samplesFragment([
+    { metric: 'steps', rows: other.rows, m: 2, source: 'Health Connect' },
+    { metric: 'steps', rows: [{ day: '2026-03-08', sec: 3600, v: 5 }], m: 3, source: 'Altro' },
+  ]);
+  assert.equal(two['2026-03-08'].steps, 1000);
+});
+
+test('active calories are read and empty days ignored', () => {
+  const kcal = parseSampleCsv(csv('Data,Orario,Calorie attive,Calorie a riposo,Calorie totali', [
+    '2026.03.07 00:00:00,00:00:00,"0.0","0.0","0.0"',
+    '2026.03.08 00:00:00,00:00:00,"412.5","1600.0","2012.5"',
+  ]));
+  assert.equal(kcal.metric, 'kcal');
+  const days = samplesFragment([{ metric: 'kcal', rows: kcal.rows, m: 1, source: 'Health Connect' }]);
+  assert.deepEqual(Object.keys(days), ['2026-03-08']);
+  assert.equal(days['2026-03-08'].kcal, 413);
 });

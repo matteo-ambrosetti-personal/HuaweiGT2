@@ -23,6 +23,7 @@ Health Sync makes one folder per data type in My Drive. The names follow the pho
 | `Health Sync Passi` | `Passi YYYY.MM.DD Huawei Health.csv` (one per day) and `Passi WW-YYYY Huawei Health.csv` (weekly history) | Steps per day and per hour, active minutes |
 | `Health Sync Freq. cardiaca` | same pattern | Heart rate: min, average, max, per hour |
 | `Health Sync Saturazione di ossigeno` | same pattern | SpO2: average and minimum |
+| `Health Sync Energia bruciata` | `Energia bruciata YYYY.MM.DD Health Connect.csv` (columns active, resting and total calories) | Active calories per day (all-zero days are ignored) |
 
 Each CSV has one row per minute that has data, in local time:
 
@@ -33,6 +34,10 @@ Data,Orario,Passi
 
 Heart-rate files add an `Origine` column (empty so far).
 
+- **Sources:** the end of a file name says where the data came from.
+  - "Huawei Health" is the watch.
+  - "Health Connect" is Android's health store, which may also count the phone's own steps. Its files hold interval records, not minutes.
+  - Sources are never added together: for each metric and day the watch's data is used, and another source only fills days the watch has nothing for.
 - **Folders:** any folder whose name starts with "Health Sync" is read, so new types are picked up when you enable them.
 - **GPX/TCX:** activity files become workouts with their route.
 - **Other files:** a CSV the page does not understand yet (for example sleep) is listed under **Not used yet** with its column names. Ask Claude to add it once such a file exists.
@@ -42,8 +47,10 @@ Heart-rate files add an `Origine` column (empty so far).
 `src/app/sync-drive.js` does the work.
 
 1. **Find the files.** The page finds the "Health Sync …" folders, then lists the files changed since the last sync. The list is scoped to those folders and filtered by modified time.
-2. **Read and merge.** It downloads only new or changed files. A daily file and a weekly file can contain the same minutes, so every touched day is rebuilt from all the files that cover it, minute by minute. A minute is never counted twice; if two files disagree, the newer one wins.
-3. **Save.** The days go to your private storage. Then a small index of the files read goes to `data/users/<you>/hsync`: file ids, modified times and the days each covers, never values. If saving fails, the same files are simply read again next time.
+2. **Read and merge.** It downloads only new or changed files. A daily file and a weekly file can contain the same minutes, so every touched day is rebuilt from all the files that cover it, minute by minute. Within one source a minute is never counted twice; if two files disagree, the newer one wins. Different sources are kept apart (see **Sources**).
+3. **Save.** The days go to your private storage. Then a small index of the files read goes to `data/users/<you>/hsync`: file ids, modified times, sources and the days each covers, never values.
+   - If saving fails, the same files are simply read again next time.
+   - When the way days are built changes, the index version goes up and the next sync re-reads every file once.
 4. **Handle failures.** A file that cannot be read is retried on the next sync. A problem with the connector (reconnect, not allowed, not connected) is shown in the Drive card with the fix, and nothing is changed.
 
 **Precedence:** data from a Huawei export always wins over Health Sync for the same day.

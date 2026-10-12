@@ -6,7 +6,7 @@ import { JsonArrayStream, parseLenient, parseArrayText } from '../lib/json-strea
 import { createHuaweiImporter } from '../lib/huawei/index.js';
 import { classifyEntry } from '../lib/huawei/entries.js';
 import { generateExport } from '../lib/sample/generate.js';
-import { parseActivityFile, parseDailyCsv, parseSampleCsv, samplesFragment } from '../lib/healthsync.js';
+import { parseActivityFile, parseDailyCsv, parseSampleCsv, samplesFragment, sourceFromTitle } from '../lib/healthsync.js';
 import { emptyDataset, mergeDataset } from '../lib/model.js';
 
 let imp = null;
@@ -98,7 +98,7 @@ self.onmessage = (e) => {
             if (s.metric) {
               if (!s.rows.length) report.skipped.push({ name: file.name, reason: 'no rows' });
               else {
-                samples.push({ metric: s.metric, rows: s.rows, m: i });
+                samples.push({ metric: s.metric, rows: s.rows, m: i, source: sourceFromTitle(file.name) });
                 report.parsed++;
               }
               continue;

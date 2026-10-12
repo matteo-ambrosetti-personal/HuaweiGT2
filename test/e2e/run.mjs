@@ -157,6 +157,9 @@ function fakeRuntime({ perm, failCode }) {
       text: csv('Data,Orario,Passi', [[day(1), '08:00:00', 120], [day(1), '08:01:00', 110], [day(1), '12:30:00', 70]]) },
     { id: 'dHr', parentId: 'fHr', title: `Freq. cardiaca ${day(1)} Huawei Health.csv`, modifiedTime: '2026-01-01T10:02:00.000Z',
       text: csv('Data,Orario,Frequenza cardiaca,Origine', [[day(1), '10:00:00', '60,'], [day(1), '10:10:00', '70,']]) },
+    // Same day from another source: must not be added to the watch's steps.
+    { id: 'hcSteps', parentId: 'fSteps', title: `Passi ${day(1)} Health Connect.csv`, modifiedTime: '2026-01-01T10:03:00.000Z',
+      text: csv('Data,Orario,Passi', [[day(1), '10:22:47', 900]]) },
   ];
   const folders = [{ id: 'fSteps', title: 'Health Sync Passi' }, { id: 'fHr', title: 'Health Sync Freq. cardiaca' }];
   const b64 = (s) => btoa(String.fromCharCode(...new TextEncoder().encode(s)));

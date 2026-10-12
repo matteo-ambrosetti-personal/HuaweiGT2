@@ -8,7 +8,10 @@
 //   Data,Orario,Saturazione di ossigeno     2026.03.07 03:00:00,03:00:00,97.0
 // one row per non-empty minute, local wall-clock time, in daily files
 // ("<type> YYYY.MM.DD Huawei Health.csv") and weekly history files
-// ("<type> WW-YYYY Huawei Health.csv") that can cover the same day.
+// ("<type> WW-YYYY Huawei Health.csv") that can cover the same day. The name
+// ends with the data source: "… Health Connect.csv" files hold the same kind of
+// data from Health Connect (interval records, other devices) and are never
+// added to the watch's own.
 // Activity files are standard GPX/TCX. Daily-summary CSVs are matched by
 // column synonyms (parseDailyCsv).
 
@@ -166,8 +169,17 @@ export const SAMPLE_METRICS = {
   steps: ['passi', 'steps', 'step count'],
   hr: ['frequenza cardiaca', 'heart rate', 'bpm'],
   spo2: ['saturazione di ossigeno', 'oxygen saturation', 'blood oxygen', 'spo2'],
+  kcal: ['calorie attive', 'active calories'],
 };
-export const SAMPLE_LABELS = { steps: 'steps', hr: 'heart rate', spo2: 'SpO2' };
+export const SAMPLE_LABELS = { steps: 'steps', hr: 'heart rate', spo2: 'SpO2', kcal: 'calories' };
+/** A day-row field each metric always sets, to tell which metrics a fragment holds. */
+export const SAMPLE_FIELDS = { steps: 'steps', hr: 'hrAvg', spo2: 'spo2Avg', kcal: 'kcal' };
+
+/** The data source a Health Sync file name ends with: "Passi 2026.10.11 Health Connect.csv" → "Health Connect". */
+export function sourceFromTitle(title) {
+  const m = /(?:\d{4}\.\d{1,2}\.\d{1,2}|\d{1,2}-\d{4})\s+(.+?)\.[a-z0-9]+$/i.exec(String(title || ''));
+  return m ? m[1].trim() : '';
+}
 
 const normHeader = (s) => String(s).toLowerCase().replace(/\(.*?\)/g, ' ').replace(/[_\s]+/g, ' ').trim();
 
@@ -306,6 +318,12 @@ function sampleDay(metric, samples) {
     }
     return n ? { spo2Avg: Math.round((sum / n) * 10) / 10, spo2Min: Math.round(min) } : null;
   }
+  if (metric === 'kcal') {
+    // Health Connect writes all-zero rows for days without data.
+    let sum = 0;
+    for (const v of samples.values()) if (v > 0) sum += v;
+    return sum > 0 ? { kcal: Math.round(sum) } : null;
+  }
   return null;
 }
 
@@ -319,24 +337,40 @@ export function samplesToDays(metric, perDay) {
   return out;
 }
 
+const WATCH_SOURCE = /huawei/i;
+
 /**
- * Parsed sample files [{metric, rows, m}] of any metrics → {date → row}.
+ * Parsed sample files [{metric, rows, m, source}] of any metrics → {date → row}.
+ * Files of one source are unioned minute by minute. Different sources (e.g.
+ * "Huawei Health" and "Health Connect") are never added together: per metric
+ * and day the watch's own source wins, otherwise the one with most samples.
  * `onlyDays` (Map metric → Set of days) limits what is computed.
  */
 export function samplesFragment(files, onlyDays = null) {
-  const byMetric = new Map();
+  const groups = new Map(); // metric → Map(source → files)
   for (const f of files) {
     if (!SAMPLE_METRICS[f.metric]) continue;
-    if (!byMetric.has(f.metric)) byMetric.set(f.metric, []);
-    byMetric.get(f.metric).push(f);
+    if (!groups.has(f.metric)) groups.set(f.metric, new Map());
+    const bySource = groups.get(f.metric);
+    const source = f.source || '';
+    if (!bySource.has(source)) bySource.set(source, []);
+    bySource.get(source).push(f);
   }
   const days = {};
-  for (const [metric, list] of byMetric) {
+  for (const [metric, bySource] of groups) {
     const want = onlyDays ? onlyDays.get(metric) : null;
     if (onlyDays && !want?.size) continue;
-    for (const [date, row] of Object.entries(samplesToDays(metric, unionSamples(list, want)))) {
-      Object.assign((days[date] ||= {}), row);
+    const best = new Map(); // day → {watch, n, row}
+    for (const [source, list] of bySource) {
+      const watch = WATCH_SOURCE.test(source);
+      for (const [day, samples] of unionSamples(list, want)) {
+        const row = sampleDay(metric, samples);
+        if (!row) continue;
+        const cur = best.get(day);
+        if (!cur || (watch && !cur.watch) || (watch === cur.watch && samples.size > cur.n)) best.set(day, { watch, n: samples.size, row });
+      }
     }
+    for (const [day, { row }] of best) Object.assign((days[day] ||= {}), row);
   }
   return days;
 }
