@@ -82,6 +82,9 @@ jobs:
             android/**/*.gradle*
             android/gradle/wrapper/gradle-wrapper.properties
       - uses: android-actions/setup-android@v3
+        with:
+          # The default list includes "tools", a package the SDK no longer has.
+          packages: platform-tools platforms;android-36
       - run: npm ci
       - name: Build the web app into the Android project
         run: npm run build:app && npx cap sync android
