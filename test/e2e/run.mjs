@@ -111,6 +111,39 @@ await page.getByRole('button', { name: 'Show that period' }).click();
 await page.waitForSelector('tbody tr.clickable');
 await page.click('.seg button:has-text("1Y")');
 
+step('route explorer: hover names a route, wheel zooms, click opens it');
+await page.goto(url + '#workouts');
+await page.waitForSelector('.panel:has(#weekly-distance) svg path');
+await (await page.waitForSelector('.panel:has(#all-routes) canvas')).scrollIntoViewIfNeeded();
+await page.waitForTimeout(800); // full tracks replace the outlines
+/** Count of drawn pixels and the page position of the most opaque one. */
+const routePixels = () => page.$eval('.panel:has(#all-routes) canvas', (c) => {
+  const { data } = c.getContext('2d').getImageData(0, 0, c.width, c.height);
+  let n = 0, best = -1, at = 0;
+  for (let i = 3; i < data.length; i += 4) {
+    if (!data[i]) continue;
+    n++;
+    if (data[i] > best) { best = data[i]; at = (i - 3) / 4; }
+  }
+  const r = c.getBoundingClientRect();
+  return { n, hit: [r.left + ((at % c.width) + 0.5) * (r.width / c.width), r.top + (Math.floor(at / c.width) + 0.5) * (r.height / c.height)] };
+});
+const drawn = await routePixels();
+assert.ok(drawn.n > 200, `routes drawn (${drawn.n} px)`);
+await page.mouse.move(...drawn.hit);
+await page.waitForFunction(() => document.getElementById('tip')?.style.display === 'block' && /Distance/.test(document.getElementById('tip').textContent));
+const mapBox = await (await page.$('.panel:has(#all-routes) canvas')).boundingBox();
+await page.mouse.move(mapBox.x + mapBox.width / 2, mapBox.y + mapBox.height / 2);
+await page.mouse.wheel(0, -800);
+await page.waitForTimeout(400);
+const zoomed = await routePixels();
+assert.notEqual(zoomed.n, drawn.n, 'the wheel zooms the map');
+await page.screenshot({ path: `${SHOTS}/11-route-explorer-zoomed.png` });
+await page.mouse.move(...zoomed.hit);
+await page.waitForTimeout(100);
+await page.mouse.click(...zoomed.hit);
+await page.waitForFunction(() => location.hash.startsWith('#workout-'), null, { timeout: 5000 });
+
 step('workout detail with route and splits');
 await page.goto(url + '#workouts');
 await page.waitForSelector('tbody tr.clickable');
@@ -127,7 +160,25 @@ await page.waitForSelector('#route', { timeout: 15000 });
 await page.waitForTimeout(600);
 const splitRows = await page.$$eval('text=Splits', (els) => els.length);
 assert.ok(splitRows > 0, 'splits shown');
+const training = await page.textContent('#training-stats');
+assert.match(training, /Aerobic training effect/, training);
+assert.match(training, /Ground contact/, training);
 await page.screenshot({ path: `${SHOTS}/10-workout-detail.png`, fullPage: true });
+const routeSvg = await page.$('.panel:has(#route) svg');
+await routeSvg.scrollIntoViewIfNeeded();
+const routeBox = await routeSvg.boundingBox();
+await page.mouse.move(routeBox.x + routeBox.width / 2, routeBox.y + routeBox.height / 2);
+await page.mouse.wheel(0, -500);
+await page.waitForTimeout(300);
+assert.match(await page.$eval('.panel:has(#route) svg > g', (g) => g.getAttribute('transform') || ''), /scale\(/, 'the route map zooms');
+
+step('records show running fitness');
+await page.goto(url + '#records');
+await page.waitForSelector('#running-fitness');
+assert.match(await page.textContent('#running-fitness'), /Predicted race times[\s\S]*5 km[\s\S]*Lactate threshold/);
+await page.waitForSelector('.panel:has(#predictions) svg path[stroke="var(--run)"]');
+await page.screenshot({ path: `${SHOTS}/12-running-fitness.png`, fullPage: true });
+await page.goBack();
 
 step('table view toggle');
 await page.click('button:has-text("Table") >> nth=0');
@@ -144,7 +195,7 @@ await p2.waitForTimeout(600);
 await p2.screenshot({ path: `${SHOTS}/20-phone-dark-overview.png`, fullPage: true });
 const overflow = await p2.evaluate(() => document.documentElement.scrollWidth - window.innerWidth);
 assert.ok(overflow <= 1, `no horizontal page scroll (overflow ${overflow}px)`);
-for (const t of ['sleep', 'workouts', 'data']) {
+for (const t of ['sleep', 'workouts', 'records', 'data']) {
   await p2.goto(url + '#' + t);
   await p2.waitForTimeout(600);
   const ov = await p2.evaluate(() => document.documentElement.scrollWidth - window.innerWidth);

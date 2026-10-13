@@ -53,7 +53,7 @@ Heart-rate files add an `Origine` column (empty so far).
    - When the way days are built changes, the index version goes up and the next sync re-reads every file once.
 4. **Handle failures.** A file that cannot be read is retried on the next sync. A problem with the connector (reconnect, not allowed, not connected) is shown in the Drive card with the fix, and nothing is changed.
 
-**Precedence:** data from a Huawei export always wins over Health Sync for the same day.
+**Precedence:** data from a Huawei export wins over Health Sync for the same day, except for steps and heart rate: there the more complete day wins (more steps, more heart-rate samples), whole. An export's last days are often partial, while Health Sync already has them in full.
 
 ## Privacy
 

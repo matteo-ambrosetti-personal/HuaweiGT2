@@ -4,21 +4,67 @@ import { emptyDataset, mergeDataset, mergeDay } from '../src/lib/model.js';
 import {
   summarize, streaks, weekdayProfile, weeklyVolume, rollingMean, rollingMedian, linearTrend,
   zonesFromHist, estimateMaxHr, personalRecords, yearSummary, resolveRange, previousRange,
-  sleepSummary, bedMinute, stepBests,
+  sleepSummary, bedMinute, stepBests, runningFitness, predictionConsistent,
 } from '../src/lib/stats.js';
 
 const day = (date, extra) => ({ date, ...extra });
 
 test('day merge respects source precedence per metric group', () => {
   const d = { date: '2025-01-01' };
-  mergeDay(d, { steps: 9000, distance: 6000, restHr: 55 }, 'healthsync');
   mergeDay(d, { steps: 10000, hrAvg: 70 }, 'export');
-  mergeDay(d, { steps: 1, restHr: 54, spo2Avg: 97 }, 'intervals');
+  mergeDay(d, { steps: 10000, distance: 6000, restHr: 55 }, 'healthsync');
+  mergeDay(d, { steps: 10000, restHr: 54, spo2Avg: 97 }, 'intervals');
   assert.equal(d.steps, 10000, 'export owns steps');
   assert.equal(d.distance, 6000, 'missing field filled from lower rank');
   assert.equal(d.restHr, 54, 'intervals outranks healthsync');
   assert.equal(d.spo2Avg, 97);
   assert.deepEqual(d.src, { steps: 'export', rest: 'intervals', hr: 'export', spo2: 'intervals' });
+});
+
+test('for steps and heart rate the more complete day wins', () => {
+  // An export's last day is often partial; a fresher Health Sync day stays.
+  const partial = { date: '2026-03-12' };
+  mergeDay(partial, { steps: 8800, stepsHourly: new Array(24).fill(1), hrAvg: 80, hrN: 300 }, 'healthsync');
+  mergeDay(partial, { steps: 140, distance: 70, kcal: 4, hrAvg: 75, hrN: 12, restHr: 55 }, 'export');
+  assert.equal(partial.steps, 8800);
+  assert.equal(partial.distance, undefined, 'the partial day adds nothing to the fuller one');
+  assert.equal(partial.kcal, undefined);
+  assert.equal(partial.hrAvg, 80);
+  assert.equal(partial.restHr, 55, 'other groups keep the rank rule');
+  assert.deepEqual(partial.src, { steps: 'healthsync', hr: 'healthsync', rest: 'export' });
+
+  // The other order: the fuller day takes the whole group, so the partial
+  // day's distance and calories don't sit next to the fuller day's steps.
+  const later = { date: '2026-03-12' };
+  mergeDay(later, { steps: 140, distance: 70, kcal: 4, hrAvg: 75, hrN: 12, restHr: 55 }, 'export');
+  mergeDay(later, { steps: 8800, stepsHourly: new Array(24).fill(1), hrAvg: 80, hrN: 300 }, 'healthsync');
+  assert.equal(later.steps, 8800);
+  assert.equal(later.distance, undefined);
+  assert.equal(later.kcal, undefined);
+  assert.equal(later.hrAvg, 80);
+  assert.equal(later.restHr, 55);
+  assert.deepEqual(later.src, { steps: 'healthsync', hr: 'healthsync', rest: 'export' });
+
+  // Gaps are still filled when rank decides (no step count to compare).
+  const gap = { date: '2026-03-10' };
+  mergeDay(gap, { steps: 5000 }, 'export');
+  mergeDay(gap, { kcal: 300 }, 'healthsync');
+  assert.equal(gap.kcal, 300);
+  assert.equal(gap.src.steps, 'export');
+
+  // A complete export day replaces a smaller one; a tie goes to the higher rank.
+  const full = { date: '2026-03-11' };
+  mergeDay(full, { steps: 6800, hrN: 240, hrAvg: 90 }, 'healthsync');
+  mergeDay(full, { steps: 7150, hrN: 240, hrAvg: 88 }, 'export');
+  assert.equal(full.steps, 7150);
+  assert.equal(full.hrAvg, 88);
+  assert.deepEqual(full.src, { steps: 'export', hr: 'export' });
+
+  // A later, fuller sync of the same day takes over again; the same source always overwrites.
+  mergeDay(full, { steps: 8000 }, 'healthsync');
+  assert.equal(full.steps, 8000);
+  mergeDay(full, { steps: 7900 }, 'healthsync');
+  assert.equal(full.steps, 7900);
 });
 
 test('workouts from different sources merge within ±2 minutes', () => {
@@ -127,4 +173,24 @@ test('sleep summary uses bedtime relative to midnight', () => {
   const s = sleepSummary(Object.values(sampleDs().nights));
   assert.equal(s.avgTotal, 450);
   assert.equal(s.avgStart, 0); // -30 and +30
+});
+
+test('running fitness keeps consistent race predictions and the latest threshold', () => {
+  const ok = { k1: 300, k3: 960, k5: 1650, k10: 3450, hm: 7600, m: 16000 };
+  assert.equal(predictionConsistent(ok), true);
+  assert.equal(predictionConsistent({ ...ok, k5: 900 }), false, 'a 5 km faster than its 3 km');
+  assert.equal(predictionConsistent({ k5: 1650 }), true, 'one distance is fine');
+  assert.equal(predictionConsistent({}), false);
+  assert.equal(predictionConsistent({ k1: 600, k3: 1100, k5: 1900 }), true, 'the unexplained km1 value is not compared');
+  const ds = emptyDataset();
+  ds.days['2026-01-02'] = day('2026-01-02', { pred: ok, lthr: { hr: 165, pace: 330 } });
+  ds.days['2026-01-01'] = day('2026-01-01', { pred: { ...ok, k5: 1700 } });
+  ds.days['2026-01-03'] = day('2026-01-03', { pred: { ...ok, k5: 900, k10: 1900 } });
+  ds.days['2026-01-04'] = day('2026-01-04', { steps: 5000 });
+  const fit = runningFitness(ds);
+  assert.deepEqual(fit.predictions.map((p) => p.date), ['2026-01-01', '2026-01-02'], 'oldest first, inconsistent day left out');
+  assert.equal(fit.dropped, 1);
+  assert.equal(fit.latest.date, '2026-01-02');
+  assert.equal(fit.latest.k5, 1650);
+  assert.deepEqual(fit.latestThreshold, { date: '2026-01-02', hr: 165, pace: 330 });
 });

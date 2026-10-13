@@ -317,6 +317,56 @@ export function personalRecords(ds) {
   };
 }
 
+// ------------------------------------------------------------- running fitness
+
+/**
+ * Race distances the watch predicts, in km, keyed as on day.pred. Its `km1`
+ * value (day.pred.k1) is left out: it runs far slower per km than the 3 km
+ * time, so it can't be a 1 km time, and Huawei's field list doesn't say what it is.
+ */
+export const PREDICTION_DISTANCES = [
+  { key: 'k3', label: '3 km', km: 3 },
+  { key: 'k5', label: '5 km', km: 5 },
+  { key: 'k10', label: '10 km', km: 10 },
+  { key: 'hm', label: 'Half marathon', km: 21.0975 },
+  { key: 'm', label: 'Marathon', km: 42.195 },
+];
+
+/**
+ * A longer race is never run at a faster pace than a shorter one. The watch
+ * sometimes stores 5 km+ times that break this (a 5 km faster than its 3 km),
+ * so those estimates are left out rather than charted. 2% leeway.
+ */
+export function predictionConsistent(pred) {
+  let prev = 0;
+  for (const { key, km } of PREDICTION_DISTANCES) {
+    const t = pred?.[key];
+    if (!(t > 0)) continue;
+    const pace = t / km;
+    if (pace < prev * 0.98) return false;
+    prev = pace;
+  }
+  return prev > 0;
+}
+
+/**
+ * The watch's running estimates over time: race predictions (consistent ones
+ * only, with a count of the rest) and lactate threshold, oldest first.
+ */
+export function runningFitness(ds) {
+  const days = Object.values(ds.days).sort((a, b) => a.date.localeCompare(b.date));
+  const withPred = days.filter((d) => d.pred);
+  const predictions = withPred.filter((d) => predictionConsistent(d.pred)).map((d) => ({ date: d.date, ...d.pred }));
+  const threshold = days.filter((d) => d.lthr && (d.lthr.hr > 0 || d.lthr.pace > 0)).map((d) => ({ date: d.date, ...d.lthr }));
+  return {
+    predictions,
+    dropped: withPred.length - predictions.length,
+    latest: predictions.at(-1) || null,
+    threshold,
+    latestThreshold: threshold.at(-1) || null,
+  };
+}
+
 /** Totals per calendar year. */
 export function yearSummary(ds) {
   const years = new Map();

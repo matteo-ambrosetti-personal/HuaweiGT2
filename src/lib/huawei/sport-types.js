@@ -64,6 +64,7 @@ export function sportFromCodes(outer, inner) {
   const i = INNER[Number(inner)];
   if (i) return { ...i, code: Number(outer ?? inner) };
   const code = Number(outer ?? inner);
+  if (!Number.isFinite(code)) return { key: 'unknown', label: 'Workout', family: 'other', code: null };
   return { key: `type_${code}`, label: `Type ${code}`, family: 'other', code };
 }
 

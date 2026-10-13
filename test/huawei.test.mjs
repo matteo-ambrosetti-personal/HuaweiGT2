@@ -5,7 +5,7 @@ import { classifyEntry } from '../src/lib/huawei/entries.js';
 import { createHuaweiImporter } from '../src/lib/huawei/index.js';
 import { parseArrayText } from '../src/lib/json-stream.js';
 import { normTime, splitAttribute, parseDetail, normalizeMotionRecord, decodePaceKey } from '../src/lib/huawei/motion.js';
-import { pointValue, numericFor } from '../src/lib/huawei/health.js';
+import { pointValue, numericFor, createHealthAccumulator } from '../src/lib/huawei/health.js';
 import { sportFromCodes } from '../src/lib/huawei/sport-types.js';
 
 function importGenerated(opts) {
@@ -139,6 +139,7 @@ test('sport codes map to families, unknown codes become Type N', () => {
   assert.equal(sportFromCodes(282).family, 'hike');
   assert.equal(sportFromCodes(null, 259).family, 'ride');
   assert.deepEqual(sportFromCodes(999).label, 'Type 999');
+  assert.equal(sportFromCodes(undefined, undefined).label, 'Workout', 'no code at all');
 });
 
 test('imports a generated export end to end', () => {
@@ -180,4 +181,17 @@ test('imports a generated export end to end', () => {
     assert.equal(night.maxHr, undefined, '255 is not available');
     assert.ok(night.stages.length > 3);
   }
+});
+
+test('race predictions and lactate threshold become day fields', () => {
+  const acc = createHealthAccumulator();
+  const t = Date.UTC(2025, 1, 10, 5, 0, 0);
+  const point = (key, value, at) => ({ key, value: JSON.stringify(value), startTime: at, endTime: at });
+  acc.add({ type: 300009, timeZone: '+0100', samplePoints: [point('PREDICTED_TIMES', { km1: 640, km3: 1150, km5: 1990, km10: 4120, halfMarathon: 9200, marathon: 19300 }, t)] });
+  acc.add({ type: 300009, timeZone: '+0100', samplePoints: [point('PREDICTED_TIMES', { km5: 1975, km10: 4100 }, t + 3600e3)] });
+  acc.add({ type: 300012, timeZone: '+0100', samplePoints: [point('LACTATE_THRESHOLD', { lthrHr: 162, lthrPace: 322, source: 1 }, t)] });
+  const { days, diag } = acc.finish();
+  assert.deepEqual(days['2025-02-10'].pred, { k5: 1975, k10: 4100 }, 'latest estimate of the day');
+  assert.deepEqual(days['2025-02-10'].lthr, { hr: 162, pace: 322 });
+  assert.equal(diag.unknownKeys.PREDICTED_TIMES, undefined);
 });

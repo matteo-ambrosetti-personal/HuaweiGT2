@@ -107,3 +107,17 @@ export function emptyElsewhere(ctx, { title, dates, span, one }) {
   const text = s.from === s.to ? one(fmtDate(s.from)) : span(fmtDate(s.from), fmtDate(s.to));
   return emptyState(title, text, h('button', { class: 'btn primary', type: 'button', onclick: () => ctx.actions.showRange(s.from, s.to) }, 'Show that period'));
 }
+
+/**
+ * Workouts stored by a version of this page that predates the 2026 export
+ * layout have no sport, distance or route ("Type NaN"). Importing the same
+ * export again replaces them in place.
+ */
+export function oldImportNotice(ds) {
+  const n = Object.values(ds.workouts).filter((w) => w.label === 'Type NaN').length;
+  if (!n) return null;
+  return h('div', { class: 'msg', id: 'old-import' },
+    h('strong', { text: `${n} ${n === 1 ? 'workout needs' : 'workouts need'} a fresh import` }),
+    `${n === 1 ? 'It was' : 'They were'} saved by an earlier version of this page that could not read the 2026 export format, so ${n === 1 ? 'it has' : 'they have'} no sport, distance or route. Import the same Huawei export again under Data to restore ${n === 1 ? 'it' : 'them'}. `,
+    h('a', { href: '#data', text: 'Go to Data' }));
+}

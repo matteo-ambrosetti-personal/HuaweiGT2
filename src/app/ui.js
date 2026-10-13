@@ -105,6 +105,13 @@ export const FAMILY_COLOR = {
 };
 
 /** Resolve a CSS variable (for canvas drawing). */
+/** How to zoom a map, worded for touch screens or for a mouse. */
+export function mapHint(open) {
+  const touch = window.matchMedia?.('(pointer: coarse)').matches;
+  const how = touch ? 'Pinch to zoom, move with two fingers, double-tap to reset.' : 'Scroll or pinch to zoom, drag to pan, double-click to reset.';
+  return open ? `${how} ${touch ? 'Tap' : 'Select'} a route to open it.` : how;
+}
+
 export function cssVar(name) {
   return getComputedStyle(document.documentElement).getPropertyValue(name).trim() || '#888';
 }

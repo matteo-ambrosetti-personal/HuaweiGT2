@@ -1,6 +1,6 @@
 import { h, chartCard, section, compact, emptyState } from '../ui.js';
 import { dial, calendarHeatmap, stackedBars, routeThumb } from '../charts.js';
-import { tile, bucketColor, paceOrSpeed, workoutTitle, workoutWhen, distanceText, durationText, weeklySpark, dataSpan } from './common.js';
+import { tile, bucketColor, paceOrSpeed, workoutTitle, workoutWhen, distanceText, durationText, weeklySpark, dataSpan, oldImportNotice } from './common.js';
 import { summarize, change, comparable, daySeries, weeklyVolume, workoutsIn, latestDate } from '../../lib/stats.js';
 import { fmtInt, fmtHoursMinutes, fmtSleep, fmtKm, fmtDate, addDays } from '../../lib/format.js';
 import { BUCKETS, BUCKET_LABELS } from '../../lib/huawei/sport-types.js';
@@ -35,6 +35,8 @@ export function renderOverview(root, ctx) {
     tile({ label: 'Resting heart rate', value: cur.restHr == null ? '—' : Math.round(cur.restHr), unit: 'bpm', delta: delta(cur.restHr, old.restHr), goodWhen: 'down', color: 'var(--heart)', spark: { values: weeklySpark(rows, 'restHr'), color: 'var(--heart)' } }),
     tile({ label: 'Average sleep', value: cur.sleepAvg == null ? '—' : fmtSleep(cur.sleepAvg), delta: delta(cur.sleepAvg, old.sleepAvg), color: 'var(--sleep)', note: cur.nights ? `${cur.nights} nights tracked` : null }),
   );
+  const stale = oldImportNotice(ds);
+  if (stale) root.append(stale);
   root.append(h('section', { class: 'section' }, h('div', { class: 'hero' }, dialEl, tiles),
     cmp ? null : h('p', { class: 'note muted', style: { margin: 0 }, text: 'Changes are hidden: the previous period of the same length has too little data to compare.' })));
 

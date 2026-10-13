@@ -4,7 +4,7 @@
 
 /* global d3 */
 import { s, showTip, hideTip, clear, compact, cssVar } from './ui.js';
-import { decodePolyline, fitProjection, bbox } from '../lib/geo.js';
+import { decodePolyline, fitProjection, bbox, routeCluster } from '../lib/geo.js';
 import { fmtMinuteOfDay } from '../lib/format.js';
 
 const MARGIN = { top: 12, right: 12, bottom: 26, left: 40 };
@@ -43,7 +43,7 @@ function hourTicks(maxValue, unit) {
 }
 
 function timeAxis(g, x, innerH, width, opts = {}) {
-  const axis = d3.axisBottom(x).ticks(Math.max(2, Math.floor(width / 90))).tickSizeOuter(0);
+  const axis = d3.axisBottom(x).ticks(opts.ticks || Math.max(2, Math.floor(width / 90))).tickSizeOuter(0);
   if (opts.format) axis.tickFormat(opts.format);
   else axis.tickFormat(d3.utcFormat(opts.long ? '%b %Y' : '%d %b'));
   const a = g.append('g').attr('class', 'axis').attr('transform', `translate(0,${innerH})`).call(axis);
@@ -181,7 +181,7 @@ export function stackedBars(el, width, { rows, keys, height = 220, yFormat = com
  * series: [{key, label, color, points:[{x: Date, y}], width?, dots?}]
  * band: {points:[{x, lo, hi}], color, label}
  */
-export function lineChart(el, width, { series, band, height = 220, yFormat = compact, tipFormat, yDomain, invertY = false, title, xFormat, zeroBased = false, refLines = [] }) {
+export function lineChart(el, width, { series, band, height = 220, yFormat = compact, tipFormat, yDomain, invertY = false, title, xFormat, xTicks, zeroBased = false, refLines = [] }) {
   const m = { ...MARGIN, left: 44 };
   const innerW = width - m.left - m.right, innerH = height - m.top - m.bottom;
   const svg = svgRoot(el, width, height, title);
@@ -198,7 +198,7 @@ export function lineChart(el, width, { series, band, height = 220, yFormat = com
   const padY = (hi - lo) * 0.08;
   const y = d3.scaleLinear().domain(invertY ? [hi + padY, lo - padY] : [lo - (zeroBased ? 0 : padY), hi + padY]).nice().range([innerH, 0]);
   gridY(g, y, innerW, 4, yFormat);
-  timeAxis(g, x, innerH, innerW, { format: xFormat, long: (x.domain()[1] - x.domain()[0]) > 400 * 864e5 });
+  timeAxis(g, x, innerH, innerW, { format: xFormat, ticks: xTicks, long: (x.domain()[1] - x.domain()[0]) > 400 * 864e5 });
   if (bandPts.length) {
     const area = d3.area().x((p) => x(p.x)).y0((p) => y(p.lo)).y1((p) => y(p.hi)).curve(d3.curveMonotoneX);
     g.append('path').attr('d', area(bandPts)).attr('fill', band.color).attr('opacity', 0.12);
@@ -272,8 +272,9 @@ export function scatterTrend(el, width, { points, trend, height = 240, yFormat, 
   const x = d3.scaleUtc().domain(d3.extent(points, (p) => p.x)).range([0, innerW]);
   if (x.domain()[0] - x.domain()[1] === 0) x.domain([new Date(+x.domain()[0] - 864e5), new Date(+x.domain()[0] + 864e5)]);
   const [lo, hi] = d3.extent(points, (p) => p.y);
-  const pad = Math.max((hi - lo) * 0.1, 5);
-  const y = d3.scaleLinear().domain(invertY ? [hi + pad, lo - pad] : [lo - pad, hi + pad]).range([innerH, 0]);
+  const pad = Math.max((hi - lo) * 0.1, Math.abs(hi) * 0.05) || 1;
+  const floor = lo >= 0 ? Math.max(0, lo - pad) : lo - pad; // never below zero for positive values
+  const y = d3.scaleLinear().domain(invertY ? [hi + pad, floor] : [floor, hi + pad]).range([innerH, 0]);
   gridY(g, y, innerW, 4, yFormat);
   timeAxis(g, x, innerH, innerW, { long: (x.domain()[1] - x.domain()[0]) > 400 * 864e5 });
   if (trend?.length) {
@@ -489,7 +490,12 @@ export function dial(el, { value, goal, label, sub, color = 'var(--steps)', ring
 
 // ------------------------------------------------------------------ routes
 
-/** Route outline coloured by a per-point metric. points: [{lat, lon, v}] */
+const SCALE_STEPS = [10, 20, 25, 50, 100, 200, 250, 500, 1000, 2000, 2500, 5000, 10000, 20000, 50000];
+
+/**
+ * Route outline coloured by a per-point metric, with zoom and pan (strokes
+ * and markers keep their size; the scale bar follows). points: [{lat, lon, v}]
+ */
 export function routeMap(el, width, { points, segments, colorScale, height, title }) {
   const hgt = height || Math.round(Math.min(460, width * 0.75));
   const svg = svgRoot(el, width, hgt, title || 'Route');
@@ -497,27 +503,44 @@ export function routeMap(el, width, { points, segments, colorScale, height, titl
   const b = bbox(points);
   const proj = fitProjection(b, width, hgt, 24);
   const xy = points.map((p) => proj.project(p.lat, p.lon));
+  svg.append('rect').attr('width', width).attr('height', hgt).attr('fill', 'transparent');
+  const layer = svg.append('g');
   // halo first, then coloured segments
   const pathFor = (idxs) => idxs.map((i, j) => `${j ? 'L' : 'M'}${xy[i][0].toFixed(1)},${xy[i][1].toFixed(1)}`).join('');
   const segs = segments || [points.map((_, i) => i)];
-  for (const sIdx of segs) svg.append('path').attr('d', pathFor(sIdx)).attr('fill', 'none').attr('stroke', 'var(--surface)').attr('stroke-width', 7).attr('stroke-linecap', 'round').attr('stroke-linejoin', 'round');
+  for (const sIdx of segs) {
+    layer.append('path').attr('d', pathFor(sIdx)).attr('fill', 'none').attr('stroke', 'var(--surface)').attr('stroke-width', 7)
+      .attr('stroke-linecap', 'round').attr('stroke-linejoin', 'round').attr('vector-effect', 'non-scaling-stroke');
+  }
   for (const sIdx of segs) {
     for (let k = 1; k < sIdx.length; k++) {
       const i0 = sIdx[k - 1], i1 = sIdx[k];
       const v = points[i1].v;
-      svg.append('line').attr('x1', xy[i0][0]).attr('y1', xy[i0][1]).attr('x2', xy[i1][0]).attr('y2', xy[i1][1])
-        .attr('stroke', v == null || !colorScale ? 'var(--ink)' : colorScale(v)).attr('stroke-width', 3.5).attr('stroke-linecap', 'round');
+      layer.append('line').attr('x1', xy[i0][0]).attr('y1', xy[i0][1]).attr('x2', xy[i1][0]).attr('y2', xy[i1][1])
+        .attr('stroke', v == null || !colorScale ? 'var(--ink)' : colorScale(v)).attr('stroke-width', 3.5).attr('stroke-linecap', 'round')
+        .attr('vector-effect', 'non-scaling-stroke');
     }
   }
-  const [sx, sy] = xy[0], [ex, ey] = xy.at(-1);
-  svg.append('circle').attr('cx', sx).attr('cy', sy).attr('r', 6).attr('fill', 'var(--good)').attr('stroke', 'var(--surface)').attr('stroke-width', 2);
-  svg.append('circle').attr('cx', ex).attr('cy', ey).attr('r', 6).attr('fill', 'var(--ink)').attr('stroke', 'var(--surface)').attr('stroke-width', 2);
-  // scale bar
-  const target = (width * 0.22) / proj.pxPerMetre;
-  const nice = [50, 100, 200, 250, 500, 1000, 2000, 2500, 5000, 10000, 20000, 50000].reduce((a, n) => (n <= target ? n : a), 50);
-  const len = nice * proj.pxPerMetre;
-  svg.append('line').attr('x1', 16).attr('x2', 16 + len).attr('y1', hgt - 16).attr('y2', hgt - 16).attr('stroke', 'var(--ink-2)').attr('stroke-width', 2);
-  svg.append('text').attr('class', 'lbl').attr('x', 16).attr('y', hgt - 22).text(nice >= 1000 ? `${nice / 1000} km` : `${nice} m`);
+  const ends = layer.selectAll('circle.end').data([[xy[0], 'var(--good)'], [xy.at(-1), 'var(--ink)']]).join('circle')
+    .attr('class', 'end').attr('cx', (d) => d[0][0]).attr('cy', (d) => d[0][1]).attr('r', 6).attr('fill', (d) => d[1])
+    .attr('stroke', 'var(--surface)').attr('stroke-width', 2).attr('vector-effect', 'non-scaling-stroke');
+  const bar = svg.append('g').attr('pointer-events', 'none');
+  const drawBar = (k) => {
+    bar.selectAll('*').remove();
+    const ppm = proj.pxPerMetre * k;
+    const target = (width * 0.22) / ppm;
+    const nice = SCALE_STEPS.reduce((a, n) => (n <= target ? n : a), SCALE_STEPS[0]);
+    const len = nice * ppm;
+    bar.append('line').attr('x1', 16).attr('x2', 16 + len).attr('y1', hgt - 16).attr('y2', hgt - 16).attr('stroke', 'var(--ink-2)').attr('stroke-width', 2);
+    bar.append('text').attr('class', 'lbl halo').attr('x', 16).attr('y', hgt - 22).text(nice >= 1000 ? `${nice / 1000} km` : `${nice} m`);
+  };
+  drawBar(1);
+  mapZoom(svg, width, hgt, (t) => {
+    layer.attr('transform', t);
+    ends.attr('r', 6 / t.k);
+    drawBar(t.k);
+  });
+  svg.style('cursor', 'grab');
 }
 
 /** Tiny route thumbnail from an encoded polyline. */
@@ -535,39 +558,138 @@ export function routeThumb(poly, color, w = 44, hgt = 30) {
   return root;
 }
 
-/** All routes of a region overlaid on a canvas (a personal heatmap). */
-export function allRoutes(el, width, { routes, height }) {
+/**
+ * Zoom and pan for a map: wheel, two-finger pinch and drag; double-click
+ * resets. One-finger touches, and scrolling down on an unzoomed map, are
+ * left to the page so it still scrolls.
+ */
+function mapZoom(target, width, hgt, onZoom) {
+  const zoom = d3.zoom()
+    .scaleExtent([1, 40])
+    .translateExtent([[0, 0], [width, hgt]])
+    .filter((e) => {
+      if (e.type === 'touchstart') return e.touches.length > 1;
+      if (e.type === 'wheel') return e.deltaY < 0 || d3.zoomTransform(target.node()).k > 1;
+      return !e.button && e.type !== 'dblclick';
+    })
+    .on('zoom', (e) => onZoom(e.transform));
+  target.call(zoom).style('touch-action', 'pan-x pan-y');
+  target.on('dblclick', () => target.transition().duration(250).call(zoom.transform, d3.zoomIdentity));
+  return zoom;
+}
+
+/** Squared distance from point (px, py) to segment a–b. */
+function segDist2(px, py, ax, ay, bx, by) {
+  const dx = bx - ax, dy = by - ay;
+  const len = dx * dx + dy * dy;
+  const t = len ? Math.max(0, Math.min(1, ((px - ax) * dx + (py - ay) * dy) / len)) : 0;
+  const x = ax + t * dx - px, y = ay + t * dy - py;
+  return x * x + y * y;
+}
+
+/**
+ * All routes overlaid on a canvas, fitted to where most of them are
+ * (`fitAll` shows every one). Zoom and pan; hover highlights a route with a
+ * tooltip; click or tap opens it. routes: [{id, points: [{lat, lon}], color, title, rows}]
+ * Returns {update(id, points)} to swap a simplified outline for the full track.
+ */
+export function allRoutes(el, width, { routes, height, fitAll = false, onOpen }) {
   const hgt = height || Math.round(Math.min(520, width * 0.7));
   const canvas = document.createElement('canvas');
   const dpr = window.devicePixelRatio || 1;
   canvas.width = width * dpr;
   canvas.height = hgt * dpr;
-  canvas.style.width = '100%';
-  canvas.style.height = `${hgt}px`;
-  canvas.style.borderRadius = '10px';
-  canvas.style.background = cssVar('--surface-2');
+  Object.assign(canvas.style, { width: '100%', height: `${hgt}px`, borderRadius: '10px', background: cssVar('--surface-2'), cursor: 'grab' });
   canvas.setAttribute('role', 'img');
-  canvas.setAttribute('aria-label', `${routes.length} routes overlaid`);
+  canvas.setAttribute('aria-label', `${routes.length} routes overlaid; scroll or pinch to zoom`);
   el.append(canvas);
-  const all = routes.flatMap((r) => r.points);
-  if (!all.length) return;
-  const proj = fitProjection(bbox(all), width, hgt, 16);
+  const usable = routes.filter((r) => r.points.length > 1);
+  if (!usable.length) return { update() {} };
+  const focus = fitAll ? usable : routeCluster(usable);
+  const proj = fitProjection(bbox(focus.flatMap((r) => r.points)), width, hgt, 16);
+  const project = (pts) => pts.map((p) => proj.project(p.lat, p.lon));
+  const xy = usable.map((r) => project(r.points));
   const ctx = canvas.getContext('2d');
-  ctx.scale(dpr, dpr);
-  ctx.lineJoin = 'round';
-  ctx.lineCap = 'round';
-  ctx.globalAlpha = Math.max(0.18, Math.min(0.7, 6 / Math.sqrt(routes.length)));
-  for (const r of routes) {
-    ctx.strokeStyle = r.color;
-    ctx.lineWidth = 2;
+  const surface = cssVar('--surface');
+  const alpha = Math.max(0.25, Math.min(0.8, 6 / Math.sqrt(usable.length)));
+  let t = d3.zoomIdentity;
+  let hover = -1;
+
+  const trace = (pts) => {
     ctx.beginPath();
-    r.points.forEach((p, i) => {
-      const [x, y] = proj.project(p.lat, p.lon);
-      if (i) ctx.lineTo(x, y);
-      else ctx.moveTo(x, y);
+    pts.forEach(([x, y], i) => (i ? ctx.lineTo(x, y) : ctx.moveTo(x, y)));
+  };
+  function draw() {
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    ctx.clearRect(0, 0, width, hgt);
+    ctx.setTransform(dpr * t.k, 0, 0, dpr * t.k, dpr * t.x, dpr * t.y);
+    ctx.lineJoin = 'round';
+    ctx.lineCap = 'round';
+    usable.forEach((r, i) => {
+      if (i === hover) return;
+      ctx.globalAlpha = hover < 0 ? alpha : alpha * 0.45;
+      ctx.strokeStyle = r.color;
+      ctx.lineWidth = 2 / t.k;
+      trace(xy[i]);
+      ctx.stroke();
     });
-    ctx.stroke();
+    if (hover >= 0) {
+      ctx.globalAlpha = 1;
+      trace(xy[hover]);
+      ctx.strokeStyle = surface;
+      ctx.lineWidth = 7 / t.k;
+      ctx.stroke();
+      ctx.strokeStyle = usable[hover].color;
+      ctx.lineWidth = 3.5 / t.k;
+      ctx.stroke();
+    }
   }
+
+  /** Index of the route within `tol` CSS px of a pointer position, or -1. */
+  function nearest(mx, my, tol = 10) {
+    const bx = (mx - t.x) / t.k, by = (my - t.y) / t.k;
+    const limit = (tol / t.k) ** 2;
+    let best = -1, bestD = limit;
+    xy.forEach((pts, i) => {
+      for (let j = 1; j < pts.length; j++) {
+        const d = segDist2(bx, by, pts[j - 1][0], pts[j - 1][1], pts[j][0], pts[j][1]);
+        if (d < bestD) { bestD = d; best = i; }
+      }
+    });
+    return best;
+  }
+
+  const sel = d3.select(canvas);
+  mapZoom(sel, width, hgt, (tr) => { t = tr; draw(); });
+  let frame = 0;
+  canvas.addEventListener('pointermove', (event) => {
+    if (event.pointerType === 'touch') return;
+    cancelAnimationFrame(frame);
+    frame = requestAnimationFrame(() => {
+      const [mx, my] = d3.pointer(event, canvas);
+      const i = nearest(mx, my);
+      if (i !== hover) { hover = i; draw(); }
+      canvas.style.cursor = i >= 0 ? 'pointer' : 'grab';
+      const [cx, cy] = pointerXY(event);
+      if (i >= 0) showTip(cx, cy, usable[i].title, usable[i].rows || []);
+      else hideTip();
+    });
+  });
+  canvas.addEventListener('pointerleave', () => { hover = -1; draw(); hideTip(); });
+  canvas.addEventListener('click', (event) => {
+    const [mx, my] = d3.pointer(event, canvas);
+    const i = nearest(mx, my, event.pointerType === 'touch' ? 20 : 10); // a fingertip is less precise
+    if (i >= 0 && onOpen) { hideTip(); onOpen(usable[i].id); }
+  });
+  draw();
+  return {
+    update(id, points) {
+      const i = usable.findIndex((r) => r.id === id);
+      if (i < 0 || !(points?.length > 1)) return;
+      xy[i] = project(points);
+      draw();
+    },
+  };
 }
 
 // ------------------------------------------------------------------ hypnogram

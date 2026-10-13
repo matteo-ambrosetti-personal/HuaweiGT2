@@ -1,10 +1,11 @@
-import { h, chartCard, section, clear, emptyState, BUCKET_COLOR } from '../ui.js';
-import { scatterTrend, routeThumb, allRoutes } from '../charts.js';
-import { tile, bucketColor, paceOrSpeed, workoutTitle, distanceText, durationText, sourceBadges, emptyElsewhere } from './common.js';
-import { workoutsIn, rollingMedian } from '../../lib/stats.js';
+import { h, chartCard, section, clear, cssVar, mapHint, emptyState, BUCKET_COLOR } from '../ui.js';
+import { scatterTrend, stackedBars, routeThumb, allRoutes } from '../charts.js';
+import { tile, bucketColor, paceOrSpeed, workoutTitle, distanceText, durationText, sourceBadges, emptyElsewhere, oldImportNotice } from './common.js';
+import { workoutsIn, rollingMedian, weeklyVolume } from '../../lib/stats.js';
 import { fmtInt, fmtDate, fmtClock, fmtPace, fmtSpeed, fmtKm, fmtHoursMinutes, fmtOne } from '../../lib/format.js';
 import { chartBucket, BUCKETS, BUCKET_LABELS } from '../../lib/huawei/sport-types.js';
-import { decodePolyline } from '../../lib/geo.js';
+import { decodePolyline, routeCluster } from '../../lib/geo.js';
+import { trackPoints } from '../../lib/gpx.js';
 
 const SORTS = {
   date: (w) => w.start,
@@ -34,6 +35,9 @@ export function renderWorkouts(root, ctx) {
     }) || emptyState('No workouts in this period', 'Workouts recorded on the watch appear here after an import. Try a longer period.'));
     return;
   }
+
+  const stale = oldImportNotice(ds);
+  if (stale) root.append(stale);
 
   // per-bucket summaries
   const tiles = h('div', { class: 'tiles' });
@@ -179,20 +183,115 @@ export function renderWorkouts(root, ctx) {
     c.classList.add('span-6');
     grid.append(c);
   }
+  const weekly = weeklyDistance(ctx, list);
+  if (weekly) grid.prepend(weekly);
   if (grid.children.length) root.append(section('Trends', null, grid));
 
-  // all routes overlay
   const withRoute = list.filter((w) => w.thumb);
-  if (withRoute.length >= 2) {
-    const routes = withRoute.map((w) => ({ points: decodePolyline(w.thumb), color: getComputedStyle(document.documentElement).getPropertyValue(`--${{ run: 'run', walkhike: 'walk', ride: 'ride', other: 'other' }[chartBucket(w.family)]}`).trim() }));
-    root.append(chartCard({
-      id: 'all-routes',
-      title: 'Where you went',
-      sub: `${withRoute.length} routes in this period, overlaid (simplified outlines, no map background)`,
-      render: (el, w) => allRoutes(el, w, { routes }),
-      legend: BUCKETS.filter((b) => withRoute.some((w) => chartBucket(w.family) === b)).map((b) => ({ label: BUCKET_LABELS[b], color: BUCKET_COLOR[b], kind: 'line' })),
-      table: () => ({ columns: [{ label: 'Date', get: (r) => r.date }, { label: 'Workout', get: (r) => r.label }, { label: 'Distance', get: distanceText, r: true }], rows: withRoute.slice().reverse() }),
-    }));
-  }
+  if (withRoute.length >= 2) root.append(routeExplorer(withRoute, ctx));
   root.append(tableSection);
+}
+
+/** Distance per week, stacked by sport, from the period's first workout on. */
+function weeklyDistance(ctx, list) {
+  if (!list.some((w) => w.distance > 0)) return null;
+  const fams = ctx.filter.families;
+  const first = list.reduce((a, w) => (w.date < a ? w.date : a), ctx.range.to);
+  const rows = weeklyVolume(ctx.ds, { from: first, to: ctx.range.to }, 'distance');
+  const keys = BUCKETS
+    .filter((b) => (!fams || fams.includes(b)) && rows.some((r) => r[b] > 0))
+    .map((b) => ({ key: b, label: BUCKET_LABELS[b], color: BUCKET_COLOR[b] }));
+  const km = (m) => `${fmtOne(m / 1000)} km`;
+  const card = chartCard({
+    id: 'weekly-distance',
+    title: 'Distance per week',
+    sub: 'Kilometres per week, stacked by sport',
+    render: (el, w) => stackedBars(el, w, {
+      rows: rows.map((r) => ({ ...r, key: r.week, label: fmtDate(r.week, { short: true }) })),
+      keys,
+      yFormat: (v) => String(+(v / 1000).toFixed(1)),
+      tipValue: km,
+      tipTitle: (r) => `Week of ${fmtDate(r.week)}`,
+      title: 'Distance per week',
+    }),
+    legend: keys.map((k) => ({ label: k.label, color: k.color })),
+    table: () => ({
+      columns: [{ label: 'Week of', get: (r) => fmtDate(r.week) }, ...keys.map((k) => ({ label: k.label, get: (r) => (r[k.key] ? km(r[k.key]) : '—'), r: true }))],
+      rows: rows.slice().reverse(),
+    }),
+  });
+  card.classList.add('span-12');
+  return card;
+}
+
+const BUCKET_VAR = { run: '--run', walkhike: '--walk', ride: '--ride', other: '--other' };
+const FULL_TRACKS = 60;
+
+/**
+ * "Where you went": every route of the period on one canvas you can zoom,
+ * hover and click. It starts on the outlines stored with each workout and
+ * swaps in the full GPS tracks (newest 60) as they load.
+ */
+function routeExplorer(ws, ctx) {
+  const routes = ws.map((w) => {
+    const ps = paceOrSpeed(w);
+    return {
+      id: w.id,
+      points: decodePolyline(w.thumb),
+      color: cssVar(BUCKET_VAR[chartBucket(w.family)]),
+      title: `${workoutTitle(w)} · ${fmtDate(w.date, { short: true, weekday: true })} ${w.date.slice(0, 4)}`,
+      rows: [
+        { label: 'Distance', value: distanceText(w) },
+        { label: 'Time', value: durationText(w) },
+        ...(ps.value !== '—' ? [{ label: ps.label, value: `${ps.value} ${ps.unit}` }] : []),
+        ...(w.avgHr ? [{ label: 'Avg HR', value: `${Math.round(w.avgHr)} bpm` }] : []),
+      ],
+    };
+  });
+  const usable = routes.filter((r) => r.points.length > 1);
+  const far = usable.length - routeCluster(usable).length;
+  let fitAll = false, host = null, hostW = 0, map = null;
+  const draw = () => {
+    clear(host);
+    map = allRoutes(host, hostW, { routes, fitAll, onOpen: (id) => ctx.actions.openWorkout(id) });
+  };
+  const toggle = far > 0
+    ? h('button', {
+        class: 'btn', type: 'button', 'aria-pressed': 'false', style: { padding: '3px 10px', fontSize: '12px' },
+        onclick: () => {
+          fitAll = !fitAll;
+          toggle.setAttribute('aria-pressed', String(fitAll));
+          toggle.textContent = fitAll ? 'Fit the main area' : `Show all ${routes.length}`;
+          if (host) draw();
+        },
+      }, `Show all ${routes.length}`)
+    : null;
+  const card = chartCard({
+    id: 'all-routes',
+    title: 'Where you went',
+    sub: `${routes.length} routes in this period${far > 0 ? `, fitted to where most of them are (${far} elsewhere)` : ''}. ${mapHint(true)}`,
+    actions: toggle,
+    render: (el, width) => { host = el; hostW = width; draw(); },
+    legend: BUCKETS.filter((b) => ws.some((w) => chartBucket(w.family) === b)).map((b) => ({ label: BUCKET_LABELS[b], color: BUCKET_COLOR[b], kind: 'line' })),
+    table: () => ({ columns: [{ label: 'Date', get: (r) => r.date }, { label: 'Workout', get: (r) => r.label }, { label: 'Distance', get: distanceText, r: true }], rows: ws.slice().reverse() }),
+  });
+  loadFullRoutes(ws, ctx, card, (id, points) => {
+    routes.find((r) => r.id === id).points = points;
+    map?.update(id, points);
+  });
+  return card;
+}
+
+/** Load full tracks a few at a time; stops once the card leaves the page. */
+async function loadFullRoutes(ws, ctx, card, onRoute) {
+  const queue = ws.filter((w) => w.hasTrack).sort((a, b) => b.start - a.start).slice(0, FULL_TRACKS);
+  const worker = async () => {
+    for (let w = queue.shift(); w; w = queue.shift()) {
+      const track = await ctx.actions.loadTrack(w.id).catch(() => null);
+      if (!card.isConnected) return;
+      const points = trackPoints(track).filter((p) => p.pos).map((p) => p.pos);
+      if (points.length > 1) onRoute(w.id, points);
+    }
+  };
+  await Promise.all([worker(), worker(), worker(), worker()]);
 }

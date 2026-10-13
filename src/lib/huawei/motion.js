@@ -278,10 +278,13 @@ export function normalizeMotionRecord(rec) {
     minAlt: isUnsetAlt(num(summary?.mMinAlti)) ? null : num(summary.mMinAlti),
   };
   if (rec.abnormalTrack && Number(rec.abnormalTrack) !== 0) workout.abnormal = Number(rec.abnormalTrack);
+  // Running form: only ground contact time carries values on this watch (others are -1).
+  const gct = num(summary?.mAvgGroundContactTime);
+  if (gct > 0 && gct < 2000) workout.gct = Math.round(gct);
   const wear = summary?.wearSportData;
   if (wear && typeof wear === 'object') {
     workout.device = {};
-    for (const k of ['etraining_effect', 'recovery_time', 'load_peak', 'max_met']) {
+    for (const k of ['etraining_effect', 'anaerobic_exercise_etraining_effect', 'recovery_time', 'load_peak', 'max_met']) {
       if (wear[k] != null && Number.isFinite(Number(wear[k]))) workout.device[k] = Number(wear[k]);
     }
     if (!Object.keys(workout.device).length) delete workout.device;

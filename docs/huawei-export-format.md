@@ -59,6 +59,19 @@ Both layouts are read (`src/lib/huawei/motion.js`), and the synthetic export wri
 
   It also holds an inner `sportType` (HiHealth numbering) and `partTimeMap` (km → cumulative moving seconds; used for splits).
 
+  The watch's own rating of the workout, shown as the **Training** row on a workout:
+
+  | Field | Meaning |
+  |---|---|
+  | `wearSportData.etraining_effect` | aerobic training effect **× 10** (32 = 3.2 on the 0–5 scale) |
+  | `wearSportData.anaerobic_exercise_etraining_effect` | anaerobic training effect × 10 |
+  | `wearSportData.load_peak` | training load |
+  | `wearSportData.recovery_time` | recovery time advised at the end, in **minutes**; walks carry the time left over from an earlier run |
+  | `wearSportData.max_met` | large integers with no documented scale; not used |
+  | `mAvgGroundContactTime` | ground contact time, ms; the other running-form fields are −1 on a GT 2 |
+
+  Walks rate 0 for training effect and load, so they show no Training row.
+
 Detail tags:
 
 | Tag | Fields |
@@ -84,7 +97,7 @@ Outer `sportType` codes:
 | 145 | CrossFit | 147 | Strength |
 | 281 | Indoor walk | 282 | Hike |
 
-Unknown codes show as "Type N".
+Unknown codes show as "Type N"; a workout with no code at all shows as "Workout".
 
 ## Health detail
 
@@ -100,6 +113,12 @@ Records look like `{type, timeZone, samplePoints:[{key, value, startTime, endTim
 | HRV | 500044 `{"heartRateVariabilityRMSSD"}` (ms) |
 | Daily totals | 300002 `SPORT_GOAL_ACHIEVEMENT_DATA` `{stepUserValue, calorieUserValue}` (fallback for steps) |
 | On/off bed | 500010 `SLEEP_ON_OFF_BED_RECORD` `{bedTime, risingTime}` in ms |
+| Race predictions | 300009 `PREDICTED_TIMES` `{km1, km3, km5, km10, halfMarathon, marathon}` in s, about one record a day (2026 exports) |
+| Lactate threshold | 300012 `LACTATE_THRESHOLD` `{lthrHr, lthrPace, source}`: bpm and s/km, after some runs |
+
+The latest prediction and threshold of a day become `day.pred` and `day.lthr` (the Records tab's Running fitness). Two quirks in the predictions:
+- **`km1` is not a 1 km time.** Per km it is far slower than `km3`, which no 1 km time next to that 3 km time could be, and Huawei's field list doesn't describe it. It is stored but not shown.
+- **Some days don't add up.** For a few weeks the 5 km and longer times can drop below what the 3 km time allows (a 5 km faster than the 3 km). Days where a longer race is faster per km than a shorter one (2% leeway) are left out of the chart, and the page says how many.
 
 ## Per-minute data
 

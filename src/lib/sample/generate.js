@@ -52,7 +52,7 @@ export function generateExport(opts = {}) {
   const startDate = addDays(endDate, -(days - 1));
   const folder = 'HUAWEI_HEALTH_20261010120000';
 
-  const plan = { days: {}, workouts: [], nights: {} };
+  const plan = { days: {}, workouts: [], nights: {}, fitness: { pred: [], lt: [] } };
   const motion = []; // record JSON texts
   const healthByType = {}; // type → record objects
   const minuteFiles = {}; // month → records
@@ -225,6 +225,19 @@ export function generateExport(opts = {}) {
       addHealth(16, healthRecord(16, 'BLOOD_OXYGEN_SATURATION', JSON.stringify({ avgSaturation: Math.round(r(94, 99)) }), at(date, m, tz), tz, recordSeq++));
     }
     addHealth(500044, healthRecord(500044, 'HEART_RATE_VARIABILITY', JSON.stringify({ heartRateVariabilityRMSSD: Math.round(r(30, 60) + fitness * 8) }), at(date, 6 * 60, tz), tz, recordSeq++));
+    // Running fitness the watch estimates now and then (2026 exports): race predictions in s, threshold HR and pace.
+    if (i % 7 === 3) {
+      const k5 = Math.round(1700 - fitness * 140);
+      // km1 mirrors real exports: far slower per km than km3 (it isn't a 1 km time).
+      const pred = { km1: Math.round(k5 * 0.3), km3: Math.round(k5 * 0.58), km5: k5, km10: Math.round(k5 * 2.08), halfMarathon: Math.round(k5 * 4.6), marathon: Math.round(k5 * 9.6) };
+      addHealth(300009, healthRecord(300009, 'PREDICTED_TIMES', JSON.stringify(pred), at(date, 7 * 60, tz), tz, recordSeq++));
+      plan.fitness.pred.push({ date, km5: k5 });
+    }
+    if (i % 30 === 10) {
+      const lt = { lthrHr: Math.round(150 + fitness * 4), lthrPace: Math.round(370 - fitness * 20), source: 1 };
+      addHealth(300012, healthRecord(300012, 'LACTATE_THRESHOLD', JSON.stringify(lt), at(date, 7 * 60, tz), tz, recordSeq++));
+      plan.fitness.lt.push({ date, hr: lt.lthrHr, pace: lt.lthrPace });
+    }
   }
 
   // ------------------------------------------------------------ files
@@ -336,7 +349,12 @@ export function generateExport(opts = {}) {
       creepingWave: ascentDm, mTotalDescent: ascentDm - 20, mMaxAlti: 1.4e-45, mMinAlti: 3.4028235e38,
       sportType: INNER[kind], trackType: 5, coordinate: 'GCJ02',
       partTimeMap: Object.fromEntries(partTimes.map((c, i) => [String(i + 1), c])),
-      wearSportData: { max_met: 0, load_peak: 120, etraining_effect: 32, recovery_time: 840 },
+      // Derived from values above (no extra random draws, so the plan stays stable).
+      mAvgGroundContactTime: kind === 'run' ? 270 + (cadence % 30) : -1,
+      wearSportData: {
+        max_met: 0, load_peak: Math.round(minutes * 2.5), etraining_effect: 20 + (avgHr % 20),
+        anaerobic_exercise_etraining_effect: avgHr % 9, recovery_time: Math.round(minutes * 30),
+      },
     };
     const modern = recordSeq % 3 === 0; // every third workout in the 2026 layout
     const id = `wk${recordSeq++}`;

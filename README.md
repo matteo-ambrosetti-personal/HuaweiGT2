@@ -2,10 +2,10 @@
 
 A personal dashboard for a **Huawei Watch GT 2**, published as a private claude.ai Artifact. It covers:
 - **Activity:** steps, distance and calories.
-- **Workouts:** GPS routes, km splits, best efforts and heart-rate zones.
+- **Workouts:** GPS routes on a map you can zoom and hover, km splits, best efforts, heart-rate zones, weekly distance, and the watch's training rating (training effect, load, recovery time, ground contact).
 - **Sleep:** sleep stages.
 - **Health:** heart rate, SpO2, stress and HRV.
-- **Statistics:** records, streaks and year-by-year totals.
+- **Statistics:** records, streaks, year-by-year totals, and running fitness (the watch's race predictions and lactate threshold).
 
 The page also has an **Ask Claude** panel and CSV/GPX/TCX exports.
 
@@ -52,7 +52,7 @@ npm run lint
 |---|---|
 | `src/lib/` | Pure, Node-testable logic, also bundled into the parser worker |
 | `src/lib/huawei/` | Export parsers (format notes: [docs/huawei-export-format.md](docs/huawei-export-format.md)) |
-| `src/lib/model.js` | The normalised dataset and source precedence (export > intervals.icu > Health Sync) |
+| `src/lib/model.js` | The normalised dataset and source precedence (export > intervals.icu > Health Sync; for steps and heart rate the more complete day wins) |
 | `src/app/` | The page: storage on the artifact `db`, importer, views, d3 charts, Ask Claude, exports |
 | `src/app/sync-drive.js` | Health Sync → Google Drive sync (file index, change detection, per-minute merge) |
 | `bridge/` | The GT2 Bridge Cloudflare Worker (an OAuth-protected MCP connector for intervals.icu) |

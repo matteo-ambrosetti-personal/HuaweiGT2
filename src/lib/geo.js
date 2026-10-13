@@ -12,6 +12,26 @@ export function haversine(lat1, lon1, lat2, lon2) {
   return 2 * R * Math.asin(Math.min(1, Math.sqrt(a)));
 }
 
+/**
+ * The routes where most of them are: those whose centre lies within
+ * max(minKm, spread × the typical distance) of the median centre. One trip
+ * far from home then doesn't shrink every other route to a dot. Keeps at
+ * least half of the routes, else returns them all. routes: [{points: [{lat, lon}]}]
+ */
+export function routeCluster(routes, { minKm = 3, spread = 3 } = {}) {
+  if (routes.length < 3) return routes;
+  const centres = routes.map((r) => {
+    const n = r.points.length || 1;
+    return { lat: r.points.reduce((a, p) => a + p.lat, 0) / n, lon: r.points.reduce((a, p) => a + p.lon, 0) / n };
+  });
+  const mid = (xs) => xs.slice().sort((a, b) => a - b)[Math.floor(xs.length / 2)];
+  const mLat = mid(centres.map((c) => c.lat)), mLon = mid(centres.map((c) => c.lon));
+  const dist = centres.map((c) => haversine(mLat, mLon, c.lat, c.lon));
+  const limit = Math.max(minKm * 1000, mid(dist) * spread);
+  const near = routes.filter((_, i) => dist[i] <= limit);
+  return near.length >= Math.ceil(routes.length / 2) ? near : routes;
+}
+
 /** Bounding box of [{lat, lon}] → {minLat, maxLat, minLon, maxLon} or null. */
 export function bbox(points) {
   if (!points.length) return null;

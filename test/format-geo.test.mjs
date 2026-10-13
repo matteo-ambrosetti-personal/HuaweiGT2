@@ -4,7 +4,7 @@ import {
   tzOffsetMinutes, localDateKey, localHour, localMidnight, recordDayKey, addDays, daysBetween,
   weekdayIndex, weekStart, fmtDuration, fmtPace, fmtSleep, fmtMinuteOfDay,
 } from '../src/lib/format.js';
-import { haversine, simplify, encodePolyline, decodePolyline, fitProjection } from '../src/lib/geo.js';
+import { haversine, simplify, encodePolyline, decodePolyline, fitProjection, routeCluster } from '../src/lib/geo.js';
 
 test('parses Huawei time zone strings', () => {
   assert.equal(tzOffsetMinutes('+0800'), 480);
@@ -65,4 +65,17 @@ test('projection keeps points inside the box', () => {
     assert.ok(x >= 9.99 && x <= 290.01 && y >= 9.99 && y <= 190.01, `${x},${y}`);
   }
   assert.ok(proj.pxPerMetre > 0);
+});
+
+test('route cluster leaves out a trip far from the rest', () => {
+  // Synthetic places: a loop near (10, 20), offset by dLat/dLon degrees.
+  const loop = (id, dLat, dLon) => ({ id, points: [0, 1, 2, 3].map((i) => ({ lat: 10 + dLat + 0.004 * Math.sin(i), lon: 20 + dLon + 0.004 * Math.cos(i) })) });
+  const home = [loop('a', 0, 0), loop('b', 0.005, 0), loop('c', -0.004, 0.006), loop('d', 0.002, -0.005), loop('e', 0.008, 0.003)];
+  const away = loop('far', 0.09, 0.01); // about 10 km north
+  assert.deepEqual(routeCluster([...home, away]).map((r) => r.id), ['a', 'b', 'c', 'd', 'e']);
+  assert.equal(routeCluster(home).length, 5, 'nothing to leave out');
+  // Scattered routes have no main area: all stay.
+  const spread = [loop('p', 0, 0), loop('q', 0.5, 0), loop('r', 0, 0.5), loop('s', -0.5, 0)];
+  assert.equal(routeCluster(spread).length, 4);
+  assert.equal(routeCluster([home[0], away]).length, 2, 'two routes are always both shown');
 });

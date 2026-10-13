@@ -4,7 +4,10 @@
 //             nights: {date → SleepNight} }
 // Every day metric group and every workout/night remembers its source.
 // Precedence: export > intervals > healthsync > sample. A source never
-// overwrites data owned by a higher-ranked one, only fills its gaps.
+// overwrites data owned by a higher-ranked one, only fills its gaps, except
+// for steps and heart rate: there the more complete day wins the whole group
+// (more steps, more heart-rate samples), because an export's last days are
+// often partial while a fresher source already has the whole day.
 
 import { chartBucket } from './huawei/sport-types.js';
 
@@ -25,6 +28,7 @@ export const METRIC_GROUPS = {
   hrv: ['hrvAvg'],
   nap: ['napMin'],
   weight: ['weight'],
+  fitness: ['pred', 'lthr'],
 };
 
 const MATCH_WINDOW_MS = 120000;
@@ -35,17 +39,37 @@ export function emptyDataset() {
 
 const rank = (s) => SOURCE_RANK[s] ?? -1;
 
+/** How complete a day's group is, for groups where the fuller source should win. */
+const COVERAGE = { steps: (r) => r.steps, hr: (r) => r.hrN };
+
+/**
+ * How `source`'s values for a group meet the current owner's: 'take' (write
+ * what it has), 'replace' (the fuller day takes the whole group), 'fill'
+ * (only the owner's gaps) or 'skip' (a partial day adds nothing to a fuller one).
+ */
+function groupAction(group, target, incoming, owner, source) {
+  if (!owner || owner === source) return 'take';
+  const cover = COVERAGE[group];
+  if (cover) {
+    const a = cover(incoming), b = cover(target);
+    if (a != null && b != null && a !== b) return a > b ? 'replace' : 'skip';
+    if (a != null && b == null) return 'take';
+  }
+  return rank(source) >= rank(owner) ? 'take' : 'fill';
+}
+
 /** Merge one day's values from `source` into `target` (mutates target). */
 export function mergeDay(target, incoming, source) {
   target.src ||= {};
   for (const [group, fields] of Object.entries(METRIC_GROUPS)) {
     if (!fields.some((f) => incoming[f] != null)) continue;
-    const owner = target.src[group];
-    if (owner && rank(owner) > rank(source)) {
-      // Higher-ranked owner: only fill fields it lacks.
+    const action = groupAction(group, target, incoming, target.src[group], source);
+    if (action === 'skip') continue;
+    if (action === 'fill') {
       for (const f of fields) if (target[f] == null && incoming[f] != null) target[f] = incoming[f];
       continue;
     }
+    if (action === 'replace') for (const f of fields) delete target[f];
     for (const f of fields) if (incoming[f] != null) target[f] = incoming[f];
     target.src[group] = source;
   }

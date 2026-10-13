@@ -15,6 +15,11 @@ const STRESS_KEYS = new Set(['STRESS_DATA', 'STRESS']);
 const HRV_KEYS = new Set(['HEART_RATE_VARIABILITY']);
 const GOAL_KEYS = new Set(['SPORT_GOAL_ACHIEVEMENT_DATA']);
 const BED_KEYS = new Set(['SLEEP_ON_OFF_BED_RECORD']);
+// Running fitness the watch estimates (2026 exports): race predictions in
+// seconds, lactate threshold heart rate and pace (s/km).
+const PRED_KEYS = new Set(['PREDICTED_TIMES']);
+const LT_KEYS = new Set(['LACTATE_THRESHOLD']);
+const PRED_FIELDS = { km1: 'k1', km3: 'k3', km5: 'k5', km10: 'k10', halfMarathon: 'hm', marathon: 'm' };
 export const SLEEP_STAGE_KEYS = {
   PROFESSIONAL_SLEEP_SHALLOW: 'light',
   PROFESSIONAL_SLEEP_DEEP: 'deep',
@@ -86,7 +91,7 @@ export function createHealthAccumulator() {
   function day(key) {
     let d = days.get(key);
     if (!d) {
-      d = { hr: {}, rest: {}, spo2: {}, stress: {}, hrv: agg(), goal: null };
+      d = { hr: {}, rest: {}, spo2: {}, stress: {}, hrv: agg(), goal: null, pred: null, lthr: null };
       days.set(key, d);
     }
     return d;
@@ -152,6 +157,22 @@ export function createHealthAccumulator() {
         const v = numericFor(key, value);
         if (v == null || v <= 0 || v > 300) continue;
         addAgg(day(dk).hrv, v);
+      } else if (PRED_KEYS.has(key)) {
+        if (value && typeof value === 'object') {
+          const pred = {};
+          for (const [from, to] of Object.entries(PRED_FIELDS)) {
+            const s = Number(value[from]);
+            if (Number.isFinite(s) && s > 0) pred[to] = Math.round(s);
+          }
+          const d = day(dk);
+          if (Object.keys(pred).length && (!d.pred || t >= d.pred.t)) d.pred = { t, v: pred };
+        }
+      } else if (LT_KEYS.has(key)) {
+        if (value && typeof value === 'object') {
+          const hr = Number(value.lthrHr), pace = Number(value.lthrPace);
+          const d = day(dk);
+          if ((hr > 0 || pace > 0) && (!d.lthr || t >= d.lthr.t)) d.lthr = { t, v: { ...(hr > 0 ? { hr: Math.round(hr) } : {}), ...(pace > 0 ? { pace: Math.round(pace) } : {}) } };
+        }
       } else if (GOAL_KEYS.has(key)) {
         if (value && typeof value === 'object') {
           const steps = Number(value.stepUserValue);
@@ -201,6 +222,8 @@ export function createHealthAccumulator() {
         row.stressMax = Math.round(stress.max);
       }
       if (d.hrv.n) row.hrvAvg = Math.round(d.hrv.sum / d.hrv.n);
+      if (d.pred) row.pred = d.pred.v;
+      if (d.lthr) row.lthr = d.lthr.v;
       if (d.goal) {
         if (d.goal.steps != null) row.goalSteps = Math.round(d.goal.steps);
         if (d.goal.kcal != null) row.goalKcal = Math.round(d.goal.kcal);

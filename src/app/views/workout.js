@@ -1,5 +1,5 @@
 /* global d3 */
-import { h, chartCard, section, clear, cssVar, emptyState } from '../ui.js';
+import { h, chartCard, section, clear, cssVar, mapHint, emptyState } from '../ui.js';
 import { routeMap, lineChart, hBars } from '../charts.js';
 import { bucketColor, paceOrSpeed, workoutTitle, workoutWhen, sourceBadges } from './common.js';
 import { trackPoints } from '../../lib/gpx.js';
@@ -8,6 +8,31 @@ import { fmtPace, fmtDuration, fmtInt, fmtOne, fmtKm } from '../../lib/format.js
 import { chartBucket } from '../../lib/huawei/sport-types.js';
 
 const ZONE_MIX = [30, 48, 66, 84, 100];
+
+/** The usual 0–5 training-effect scale. */
+const TE_LEVELS = [[5, 'Overreaching'], [4, 'Highly improving'], [3, 'Improving'], [2, 'Maintaining'], [1, 'Minor'], [0, 'No effect']];
+const teLevel = (v) => TE_LEVELS.find(([min]) => v >= min)[1];
+
+/**
+ * Stats from the watch's own rating: training effect (stored ×10), load,
+ * recovery time (minutes) and ground contact time. Walks rate 0 and show none.
+ */
+function trainingStats(w, stat) {
+  const dev = w.device || {};
+  const out = [];
+  if (dev.etraining_effect > 0 || dev.load_peak > 0) {
+    const te = (raw) => Math.min(5, raw / 10);
+    if (dev.etraining_effect != null) out.push(stat('Aerobic training effect', fmtOne(te(dev.etraining_effect)), teLevel(te(dev.etraining_effect))));
+    if (dev.anaerobic_exercise_etraining_effect != null) {
+      const an = te(dev.anaerobic_exercise_etraining_effect);
+      out.push(stat('Anaerobic training effect', fmtOne(an), teLevel(an)));
+    }
+    if (dev.load_peak > 0) out.push(stat('Training load', fmtInt(dev.load_peak)));
+    if (dev.recovery_time > 0) out.push(stat('Recovery time', dev.recovery_time >= 90 ? Math.round(dev.recovery_time / 60) : dev.recovery_time, dev.recovery_time >= 90 ? 'h' : 'min'));
+  }
+  if (w.gct > 0) out.push(stat('Ground contact', w.gct, 'ms'));
+  return out;
+}
 
 /** Centred moving average for display (nulls stay null). */
 function smooth(values, k = 2) {
@@ -53,6 +78,13 @@ export function renderWorkout(root, ctx) {
     w.avgCadence ? stat(w.family === 'ride' ? 'Cadence' : 'Cadence', Math.round(w.avgCadence), w.family === 'ride' ? 'rpm' : 'spm') : null,
     w.swim?.laps ? stat('Laps', w.swim.laps) : null,
   )));
+  const training = trainingStats(w, stat);
+  if (training.length) {
+    root.append(h('div', { class: 'panel' },
+      h('h3', { class: 'chart-title', text: 'Training' }),
+      h('p', { class: 'chart-sub', text: 'How the watch rated this workout. Training effect runs from 0 to 5; recovery time is what the watch advised when you finished.' }),
+      h('div', { class: 'stat-row', id: 'training-stats' }, ...training)));
+  }
   if (w.abnormal) root.append(h('div', { class: 'msg' }, h('strong', { text: 'Huawei flagged this workout' }), 'The watch marked some of its data as unreliable (for example pace or distance), so treat the numbers with care.'));
 
   const body = h('div', { class: 'view' }, h('p', { class: 'loading', text: w.hasTrack ? 'Loading the route and samples…' : '' }));
@@ -120,7 +152,7 @@ export function renderWorkout(root, ctx) {
         mapHost.append(chartCard({
           id: 'route',
           title: 'Route',
-          sub: `Coloured by ${label.toLowerCase()} — darker is ${metric === 'hr' ? 'higher' : 'faster'}. Green dot = start, dark dot = finish.`,
+          sub: `Coloured by ${label.toLowerCase()} — darker is ${metric === 'hr' ? 'higher' : 'faster'}. Green dot = start, dark dot = finish. ${mapHint(false)}`,
           actions: h('div', { class: 'seg' },
             ...[foot ? ['pace', 'Pace'] : ['speed', 'Speed'], ['hr', 'Heart rate']].filter(([k]) => k !== 'hr' || pts.some((p) => p.hr)).map(([k, l]) =>
               h('button', { type: 'button', 'aria-pressed': String(metric === k), onclick: () => { metric = k; renderMap(); } }, l))),
