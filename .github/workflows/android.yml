@@ -128,7 +128,12 @@ jobs:
         run: |
           AAPT="$(ls -d "$ANDROID_HOME"/build-tools/* | sort -V | tail -1)/aapt2"
           "$AAPT" dump badging apk/gt2-logbook.apk | grep -E "^(package|sdkVersion|targetSdkVersion|application-label):"
-          "$AAPT" dump permissions apk/gt2-logbook.apk | grep -i health
+          "$AAPT" dump permissions apk/gt2-logbook.apk
+          # The export ZIP is the only data source: no Health Connect access.
+          if "$AAPT" dump permissions apk/gt2-logbook.apk | grep -i "permission.health"; then
+            echo "::error::The APK asks for Health Connect permissions"
+            exit 1
+          fi
           ls -l apk/
 
       - uses: actions/upload-artifact@v4
@@ -154,7 +159,7 @@ jobs:
             if [ "$SIGNED" = "release" ]; then
               echo "Signed with the project key: it installs over earlier builds and keeps your data."
             else
-              echo "⚠️ Signed with a throwaway key: to update an installed copy, save a **Full backup** in Data → Export first, uninstall, install this one and restore the backup."
+              echo "⚠️ Signed with a throwaway key: it cannot install over a copy signed with another key. Uninstall the old one, install this one and import your Huawei export ZIP again."
             fi
           } > "$RUNNER_TEMP/notes.md"
           gh release create "$TAG" apk/gt2-logbook.apk --target "$GITHUB_SHA" \

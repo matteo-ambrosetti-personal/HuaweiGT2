@@ -30,34 +30,29 @@ Wrist sensors estimate, and none of this is medical advice: the app says so wher
 
 ## Getting data in
 
-Huawei offers no free API for personal use. The app takes data four ways:
+There is one way in: the **Huawei privacy export**. In the Huawei Health app request your data (Me → your account → Privacy Centre → Request your data → Health), download the ZIP from the email link and choose it under **Data → Import** with the password you set ([setup-export.md](docs/setup-export.md)). It brings your full history: workouts with GPS, steps, heart rate, sleep, SpO2 and stress. Import a newer export whenever you want to bring the logbook up to date; it merges with what is already there.
 
-| Path | What it brings | Automation |
-|---|---|---|
-| **Huawei privacy export** (ZIP + password) | Full history: workouts with GPS, steps, heart rate, sleep, SpO2, stress | Manual: request, download, import ([setup-export.md](docs/setup-export.md)) |
-| **Health Sync → Health Connect** (app) | New days of steps, heart rate, sleep, SpO2, HRV and workouts | Automatic, on the phone |
-| **intervals.icu** (app: your API key; artifact: the GT2 Bridge) | New activities with GPS and HR, daily wellness | Automatic, free |
-| **Health Sync → Google Drive** (artifact) | Per-minute steps, heart rate, SpO2; GPX/TCX workouts | Automatic, through the Google Drive connector ([setup-health-sync.md](docs/setup-health-sync.md)) |
+Nothing syncs by itself, and the app reads no other files, accounts or services for data.
 
 **Ask Claude** answers questions about your data: in the artifact with your Claude usage, in the app with your own Anthropic API key (Claude Opus 5.5 by default).
 
 ## Privacy
 
-- **App:** data stays in the app's private storage on the phone; cloud backup is off. It connects only to intervals.icu, the OpenStreetMap map server and api.anthropic.com, each only when you set it up or ask. Details: [docs/android.md](docs/android.md).
-- **Artifact:** the export is decrypted and parsed in your browser and stored in the artifact's private per-user storage (`data/users/<you>/`); Claude can read it when you ask. The page may only call the Google Drive connector's read tools, as you, for folders named "Health Sync …".
+- **App:** data stays in the app's private storage on the phone; cloud backup is off. It connects only to the OpenStreetMap map server and api.anthropic.com, each only when you ask. Details: [docs/android.md](docs/android.md).
+- **Artifact:** the export is decrypted and parsed in your browser and stored in the artifact's private per-user storage (`data/users/<you>/`); Claude can read it when you ask. The page calls no connectors.
 - **Map:** OpenStreetMap's server sees the area you download, never your tracks. Map data © OpenStreetMap contributors (ODbL). Details: [docs/map-data.md](docs/map-data.md).
 
 ## Development
 
 ```sh
 npm install
-npm test               # unit tests: parsers, merge rules, statistics, the models, Health Connect, intervals.icu, storage, backups
+npm test               # unit tests: export parsers, merge rules, statistics, the models, storage, exports
 npm run fixture        # synthetic AES-encrypted export and OpenStreetMap download → test/fixtures/out/ (password test1234)
 npm run build          # → dist/gt2-logbook.html (the artifact)
 npm run build:app      # → www/ (the app: runs in the APK or any browser)
 npm run android:sync   # build www/ and copy it into android/; then ./gradlew assembleRelease in android/
-npm run test:e2e       # Chromium: the artifact, every tab, import, maps, Drive sync
-npm run test:e2e:app   # Chromium at phone size: the app, every tab, import that survives a reload, backup and restore
+npm run test:e2e       # Chromium: the artifact, every tab, import, maps, the ZIP as the only way in
+npm run test:e2e:app   # Chromium at phone size: the app, every tab, an import that survives a reload, the backup file
 npm run lint
 ```
 
@@ -66,11 +61,9 @@ npm run lint
 | `src/lib/` | Pure, Node-testable logic, also bundled into the parser worker |
 | `src/lib/models/` | The literature models and the insight cards |
 | `src/lib/huawei/` | Export parsers (format notes: [docs/huawei-export-format.md](docs/huawei-export-format.md)) |
-| `src/lib/model.js` | The normalised dataset and source precedence (export > intervals.icu > Health Sync / Health Connect; for steps and heart rate the more complete day wins) |
-| `src/app/` | The page: storage, importer, views, d3 charts, Ask Claude, exports |
-| `src/app/native-platform.js`, `src/lib/healthconnect.js`, `src/lib/intervals-api.js` | The app's platform: on-device storage, share sheet, Health Connect, intervals.icu ([docs/android.md](docs/android.md)) |
-| `src/app/sync-drive.js` | Health Sync → Google Drive sync for the artifact |
+| `src/lib/model.js` | The normalised dataset and how exports merge (a newer export fills in; for steps and heart rate the more complete day wins) |
+| `src/app/` | The page: storage, the ZIP importer, views, d3 charts, Ask Claude, exports |
+| `src/app/native-platform.js` | The app's platform: on-device storage, share sheet, back button, Ask Claude ([docs/android.md](docs/android.md)) |
 | `android/` | The Capacitor Android project |
-| `bridge/` | The GT2 Bridge Cloudflare Worker (an OAuth-protected MCP connector for intervals.icu, for the artifact) |
 
 The artifact loads d3 7.9.0 and zip.js 2.8.61 from pinned CDN URLs; the app bundles them, and the fonts, locally.

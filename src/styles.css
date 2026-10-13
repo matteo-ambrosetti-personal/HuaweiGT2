@@ -173,6 +173,8 @@
 }
 
 * { box-sizing: border-box; }
+/* Elements hidden with the attribute stay hidden whatever their display (the app build has no publisher stylesheet to do this). */
+[hidden] { display: none !important; }
 html { -webkit-text-size-adjust: 100%; }
 body {
   background: var(--bg);

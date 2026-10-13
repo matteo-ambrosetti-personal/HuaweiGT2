@@ -76,35 +76,21 @@ export class Importer {
     return p.then((m) => m.basemap);
   }
 
-  /** Parse GPX/TCX/CSV texts as a given source. */
-  activityFiles(files, source) {
-    const p = this.expectResult();
-    this.worker.postMessage({ type: 'activity-files', files, source });
-    return p;
-  }
-
   /**
-   * Import a Huawei export from picked files: one ZIP, or extracted JSON files.
+   * Import the Huawei export ZIP (as downloaded from Huawei, password-protected).
    * @param {File[]} files
    * @param {{password?: string, onProgress?: (p: {done: number, total: number, file: string}) => void}} opts
    */
   async importExport(files, { password, onProgress = () => {} } = {}) {
     const zips = files.filter((f) => /\.zip$/i.test(f.name));
-    const jsons = files.filter((f) => classifyEntry(f.webkitRelativePath || f.name) && !/\.zip$/i.test(f.name));
-    if (!zips.length && !jsons.length) {
-      throw new ImportError('no_files', 'No Huawei export files found. Pick the ZIP from Huawei, or the extracted folder.');
+    if (!zips.length) {
+      throw new ImportError('no_files', 'Choose the ZIP file you downloaded from Huawei.');
     }
     const result = this.expectResult();
     this.worker.postMessage({ type: 'start' });
     const progress = { done: 0, total: 0, file: '' };
     try {
       for (const z of zips) await this.readZip(z, password, progress, onProgress);
-      if (jsons.length) {
-        progress.total += jsons.reduce((s, f) => s + f.size, 0);
-        for (const f of jsons.sort((a, b) => entryOrder(classifyEntry(a.name)) - entryOrder(classifyEntry(b.name)))) {
-          await this.streamFile(f, classifyEntry(f.webkitRelativePath || f.name), progress, onProgress);
-        }
-      }
     } catch (err) {
       this.pending = null;
       this.worker.terminate();
@@ -177,20 +163,5 @@ export class Importer {
       this.worker.postMessage({ type: 'end', id });
     }
     await reader.close();
-  }
-
-  async streamFile(file, kind, progress, onProgress) {
-    const id = ++this.fileSeq;
-    progress.file = file.name;
-    this.worker.postMessage({ type: 'begin', id, kind, name: file.name });
-    const reader = file.stream().getReader();
-    for (;;) {
-      const { done, value } = await reader.read();
-      if (done) break;
-      progress.done += value.byteLength;
-      onProgress({ ...progress });
-      await this.sendChunk(id, value);
-    }
-    this.worker.postMessage({ type: 'end', id });
   }
 }

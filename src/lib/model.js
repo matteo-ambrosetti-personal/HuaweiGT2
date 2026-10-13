@@ -3,7 +3,9 @@
 // Dataset = { days: {date → Day}, workouts: {id → Workout}, tracks: {id → Track},
 //             nights: {date → SleepNight} }
 // Every day metric group and every workout/night remembers its source.
-// Precedence: export > intervals > healthsync = healthconnect > sample. A source never
+// Precedence: export > intervals > healthsync > sample. Only the export is
+// imported now; the other sources remain so data saved by earlier versions
+// (intervals.icu, Health Sync) keeps its labels and merge rules. A source never
 // overwrites data owned by a higher-ranked one, only fills its gaps, except
 // for steps and heart rate: there the more complete day wins the whole group
 // (more steps, more heart-rate samples), because an export's last days are
@@ -11,14 +13,12 @@
 
 import { chartBucket } from './huawei/sport-types.js';
 
-export const SOURCE_RANK = { export: 3, intervals: 2, healthsync: 1, healthconnect: 1, sample: 0 };
+export const SOURCE_RANK = { export: 3, intervals: 2, healthsync: 1, sample: 0 };
 export const SOURCE_LABELS = {
   export: 'Huawei export',
   intervals: 'intervals.icu',
   healthsync: 'Health Sync',
-  healthconnect: 'Health Connect',
   sample: 'Sample data',
-  backup: 'Backup',
 };
 
 export const METRIC_GROUPS = {

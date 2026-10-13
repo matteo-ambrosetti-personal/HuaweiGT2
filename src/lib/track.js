@@ -1,8 +1,7 @@
-// Source-independent workout analysis.
+// Workout analysis.
 //
-// Every source (Huawei export, GPX/TCX from Health Sync, intervals.icu streams)
-// produces full-resolution series for a workout. analyzeSeries() turns them
-// into what the dashboard stores: km splits, best efforts, a heart-rate
+// The Huawei export parser produces full-resolution series for a workout.
+// analyzeSeries() turns them into what the dashboard stores: km splits, best efforts, a heart-rate
 // histogram, a route thumbnail and a downsampled track (≤ MAX_TRACK points).
 
 import { haversine, simplify, encodePolyline, bbox } from './geo.js';

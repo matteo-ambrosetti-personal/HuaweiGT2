@@ -2,12 +2,8 @@
 
 GT 2 Logbook runs as an Android app (Android 8.0 or later). It is the same
 logbook as the claude.ai artifact, packaged with [Capacitor](https://capacitorjs.com),
-with everything stored on the phone and three things the artifact cannot do:
-
-- read **Health Connect** directly, so Health Sync's copy of your Huawei Health
-  data arrives without Google Drive or Claude in between;
-- read **intervals.icu** directly with your API key (no Cloudflare bridge);
-- **download the map** for your routes in one tap.
+with everything stored on the phone, the map for your routes downloaded in one
+tap, and Ask Claude with your own API key.
 
 ## Install it
 
@@ -24,30 +20,30 @@ a downloadable artifact on its workflow run.
 
 ## Get your data in
 
-| Source | In the app | Setup |
-|---|---|---|
-| Huawei privacy export (ZIP) | Data → Import, choose the ZIP from your Downloads, enter its password | [setup-export.md](setup-export.md) |
-| Health Connect (via Health Sync) | Data → Automatic updates → **Connect Health Connect** | Health Sync: Huawei Health → Health Connect; then allow the data types and "Access past data" |
-| intervals.icu | Data → Automatic updates → paste your **API key** | intervals.icu → Settings → Developer settings |
-| GPX/TCX/CSV files | Data → Add individual files | — |
+The only source of data is the ZIP you download from Huawei:
 
-Health Connect and intervals.icu sync by themselves when you open the app (at
-most hourly). Health Connect only shares 30 days unless you allow "Access past
-data"; the Huawei export is the way to bring in older history.
+1. Huawei Health app → **Me** → your account name → **Privacy Centre** →
+   **Request your data** → **Health**; set a password and submit.
+2. Download the ZIP from the email link (it usually arrives within a day and
+   works for 21 days). Keep it as it is; do not unzip it.
+3. In GT 2 Logbook: **Data → Import → Choose ZIP**, pick the file from your
+   Downloads, type the password and press **Import**.
+
+Everything is decrypted and parsed on the phone. To bring the logbook up to
+date, request a new export and import it the same way: it merges with what is
+already there. More detail: [setup-export.md](setup-export.md).
 
 ## Privacy
 
 - Data is stored in the app's private storage on the phone. Android cloud
   backup and device-to-device transfer are turned off for it
-  (`data_extraction_rules.xml`); move it with **Data → Export → Full backup**
-  and **Restore a backup…**.
-- The app reads Health Connect with read-only permissions for steps, distance,
-  active calories, heart rate, resting heart rate, HRV, SpO2, sleep, exercise,
-  weight and VO2max. It asks for nothing else and writes nothing.
-- It connects only to: intervals.icu (when you add a key), the OpenStreetMap
-  Overpass server (when you download the map: it sees the area, never your
-  tracks) and api.anthropic.com (when you press Ask, with your own API key).
-  API keys stay on the phone.
+  (`data_extraction_rules.xml`). **Data → Export** saves CSV, GPX/TCX and a
+  full JSON copy through the share sheet; **Delete all** wipes it.
+- The app asks only for the network permission. It reads no health services,
+  accounts or other files.
+- It connects only to: the OpenStreetMap Overpass server (when you download
+  the map: it sees the area, never your tracks) and api.anthropic.com (when
+  you press Ask, with your own API key). The key stays on the phone.
 
 ## Signing, and updating without losing data
 
@@ -73,7 +69,7 @@ base64 -w0 gt2-logbook.keystore   # paste the output into ANDROID_KEYSTORE_BASE6
 Keep the keystore somewhere safe and never commit it (the repository is
 public; `*.keystore` is git-ignored). Without the secrets each build is signed
 with a throwaway key: it installs fine the first time, but to update you must
-save a full backup, uninstall, install the new APK and restore the backup.
+uninstall, install the new APK and import your Huawei ZIP again.
 
 ## Build it yourself
 
@@ -95,10 +91,9 @@ in Chromium.
 | Path | Contents |
 |---|---|
 | `src/app/app-entry.js` | The app's entry: registers the platform, then starts the same page as the artifact |
-| `src/app/native-platform.js` | Capacitor wiring: on-device storage, the share sheet for exports, native HTTP, back button, Health Connect, Ask Claude |
+| `src/app/native-platform.js` | Capacitor wiring: on-device storage, the share sheet for exports, back button, Ask Claude |
 | `src/app/local-docs.js` | Document storage on the phone (`FsDocs`, JSON files) or in a browser (`IdbDocs`) behind the artifact db's interface |
-| `src/lib/healthconnect.js` | Health Connect → dataset (hourly aggregates, samples, sleep stages, workouts with heart rate) |
-| `src/lib/intervals-api.js` | intervals.icu REST client with your API key |
+| `src/app/importer.js`, `src/lib/huawei/` | The export ZIP: decryption, then the parsers, in a worker |
 | `src/app/claude-api.js` | Ask Claude through the Anthropic API (streaming tool loop) |
 | `src/lib/models/` | The training, running, recovery, sleep and rhythm models behind the Insights and Training tabs |
 | `scripts/build-app.mjs` | Bundles `www/` with d3, zip.js and the fonts local (the app loads nothing from CDNs) |

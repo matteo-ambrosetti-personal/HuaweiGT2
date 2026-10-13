@@ -2,7 +2,6 @@ import { h, section, clear, toast } from '../ui.js';
 import { fmtDate, fmtInt } from '../../lib/format.js';
 import { SOURCE_LABELS, datasetRange } from '../../lib/model.js';
 import { estimateMaxHr } from '../../lib/stats.js';
-import { skippedFolders } from '../sync-drive.js';
 import { workoutCoverage, MAP_ATTRIBUTION } from '../../lib/basemap.js';
 
 function guide(title, steps, open = false) {
@@ -11,7 +10,6 @@ function guide(title, steps, open = false) {
     h('ol', { class: 'steps-list', style: { marginTop: '8px' } }, steps.map((s) => h('li', null, ...s))));
 }
 
-const when = (iso) => new Date(iso).toLocaleString('en-GB', { dateStyle: 'medium', timeStyle: 'short' });
 
 /**
  * The map card: download OpenStreetMap data for the area around the routes
@@ -132,191 +130,6 @@ function mapCard(ctx, flash) {
 }
 const plural = (n, word) => `${fmtInt(n)} ${word}${n === 1 ? '' : 's'}`;
 
-function driveChip(d, hs) {
-  if (d.busy) return { cls: '', text: 'Syncing…' };
-  switch (d.status) {
-    case 'checking': return { cls: '', text: 'Checking…' };
-    case 'unavailable': return { cls: '', text: 'Unavailable here' };
-    case 'prompt': return { cls: '', text: 'Ready to connect' };
-    case 'missing': return { cls: 'warn', text: 'Not connected' };
-    case 'reauth': return { cls: 'warn', text: 'Reconnect' };
-    case 'denied': return { cls: 'warn', text: 'Not allowed' };
-    case 'choose': return { cls: 'warn', text: 'Choose connector' };
-    case 'approval': return { cls: 'warn', text: 'Needs approval' };
-    case 'blocked': return { cls: 'bad', text: 'Blocked' };
-    case 'nofolders': return { cls: 'warn', text: 'No files yet' };
-    default:
-      if (d.error) return { cls: 'bad', text: 'Sync failed' };
-      return hs?.at ? { cls: 'ok', text: 'Connected' } : { cls: 'ok', text: 'Allowed' };
-  }
-}
-
-function progressText(p) {
-  if (!p || p.phase === 'folders') return 'Looking for Health Sync folders…';
-  if (p.phase === 'list') return 'Listing new files…';
-  return `Reading files ${fmtInt(p.done)} of ${fmtInt(p.total)}…`;
-}
-
-/** The "Google Drive · Health Sync" card; main.js redraws it in place while syncing. */
-export function renderDriveCard(el, ctx) {
-  clear(el);
-  const d = ctx.drive || {};
-  const hs = ctx.meta?.sources?.healthsync;
-  const chip = driveChip(d, hs);
-  el.append(h('div', { class: 'section-head' },
-    h('h3', { class: 'chart-title', text: 'Google Drive · Health Sync' }),
-    h('span', { class: `chip ${chip.cls}`, id: 'drive-status' }, h('span', { class: 'dot' }), chip.text)));
-  el.append(h('p', { style: { margin: 0 }, text: 'Automatic: the Health Sync app copies your Huawei Health data into Google Drive, and this page reads it through the Google Drive connector, when you open it (at most hourly) or press Sync now.' }));
-
-  if (d.status === 'unavailable') el.append(h('p', { class: 'muted', style: { margin: 0 }, text: 'Connectors cannot be used in this view. Open the logbook on claude.ai to sync from Google Drive.' }));
-  if (d.status === 'nofolders' && !d.error) el.append(h('div', { class: 'msg' }, h('strong', { text: 'No Health Sync folders found' }), 'Google Drive has no folders named "Health Sync …" yet. Check that Health Sync uses Google Drive as a destination and has synced once.'));
-  if (d.error) el.append(h('div', { class: 'msg err', id: 'drive-error' }, h('strong', { text: d.error.title }), d.error.text));
-  if (d.busy) el.append(h('p', { class: 'muted', style: { margin: 0 }, text: progressText(d.progress) }));
-  else if (hs?.at) {
-    const r = d.report;
-    const parts = [`Last sync ${when(hs.at)}`];
-    if (r) {
-      parts.push(`${plural(r.read, 'file')} read`);
-      parts.push(r.days || r.workouts ? `${[r.days ? plural(r.days, 'day') : '', r.workouts ? plural(r.workouts, 'workout') : ''].filter(Boolean).join(' and ')} updated${r.metrics?.length ? ` (${r.metrics.join(', ')})` : ''}` : 'nothing new');
-      if (r.failed) parts.push(`${plural(r.failed, 'file')} could not be read and will be retried`);
-    }
-    if (hs.range?.to) parts.push(`data up to ${fmtDate(hs.range.to)}`);
-    el.append(h('p', { class: 'muted', style: { margin: 0 }, id: 'drive-summary', text: `${parts.join(' · ')}.` }));
-  }
-
-  const skipped = skippedFolders(ctx.syncIndex);
-  if (skipped.length) {
-    el.append(h('div', { class: 'msg' }, h('strong', { text: 'Not used yet' }),
-      ...skipped.map((s) => h('div', { text: `${s.folder}: ${plural(s.n, 'file')}${s.header ? ` (columns: ${s.header})` : s.reason ? ` (${s.reason})` : ''}` })),
-      h('div', { class: 'muted', text: 'Ask Claude to add support for these once they appear.' })));
-  }
-
-  const row = h('div', { class: 'btn-row' });
-  if (d.status !== 'unavailable' && d.status !== 'blocked' && d.status !== 'checking') {
-    row.append(h('button', { class: 'btn primary', type: 'button', id: 'drive-sync', disabled: Boolean(d.busy), onclick: () => ctx.actions.syncDrive() },
-      d.busy ? 'Syncing…' : d.status === 'prompt' ? 'Connect and sync' : 'Sync now'));
-  }
-  if (d.status === 'denied' || d.error?.action === 'permissions') {
-    row.append(h('button', { class: 'btn', type: 'button', onclick: () => ctx.actions.openPermissions() }, 'Open permissions'));
-  }
-  if (d.status === 'prompt' && !d.busy) row.append(h('span', { class: 'muted', text: 'claude.ai asks once to let this page read Google Drive.' }));
-  if (row.childNodes.length) el.append(row);
-
-  el.append(guide('Set it up', [
-    ['On your Android phone install ', h('b', { text: 'Health Sync' }), ' (one-week trial, then a small one-time fee).'],
-    ['Choose ', h('b', { text: 'Huawei Health' }), ' as the source and ', h('b', { text: 'Google Drive' }), ' as the destination. Enable steps, heart rate and SpO2; activities (GPX/TCX) and sleep are optional.'],
-    ['In claude.ai open ', h('b', { text: 'Settings → Connectors' }), ' and connect ', h('b', { text: 'Google Drive' }), '.'],
-    ['Press ', h('b', { text: 'Connect and sync' }), ' here and allow Google Drive. From then on the logbook syncs by itself when you open it.'],
-  ], !hs?.at && d.status !== 'ready'));
-}
-
-const HC_PHASES = {
-  steps: 'steps', distance: 'distance', calories: 'calories', heartRate: 'heart rate', restingHeartRate: 'resting heart rate',
-  heartRateVariability: 'HRV', oxygenSaturation: 'SpO2', weight: 'weight', vo2Max: 'VO2max', sleep: 'sleep', workouts: 'workouts',
-};
-
-/** The Health Connect card (Android app); main.js redraws it in place while syncing. */
-export function renderHealthCard(el, ctx) {
-  clear(el);
-  const hc = ctx.health || {};
-  const src = ctx.meta?.sources?.healthconnect;
-  const native = ctx.platform?.name === 'android';
-  const chip = hc.busy ? { cls: '', text: 'Syncing…' }
-    : !native ? { cls: '', text: 'Android app only' }
-    : hc.status === 'unavailable' ? { cls: 'warn', text: 'Not available' }
-    : hc.status === 'prompt' ? { cls: '', text: 'Ready to connect' }
-    : hc.status === 'ready' ? (hc.error ? { cls: 'bad', text: 'Sync failed' } : { cls: 'ok', text: src?.at ? 'Connected' : 'Allowed' })
-    : { cls: '', text: 'Checking…' };
-  el.append(h('div', { class: 'section-head' },
-    h('h3', { class: 'chart-title', text: 'Health Connect · Health Sync' }),
-    h('span', { class: `chip ${chip.cls}`, id: 'health-status' }, h('span', { class: 'dot' }), chip.text)));
-  el.append(h('p', { style: { margin: 0 }, text: 'Automatic and on the phone: the Health Sync app copies Huawei Health data into Health Connect, and this app reads it from there when you open it (at most hourly) or press Sync now. Nothing goes through a cloud.' }));
-  if (!native) {
-    el.append(h('p', { class: 'muted', style: { margin: 0 }, text: 'Health Connect exists only on Android. Install the GT 2 Logbook app on your phone to use it.' }));
-    return;
-  }
-  if (hc.status === 'unavailable') {
-    el.append(h('div', { class: 'msg' }, h('strong', { text: 'Health Connect is not available' }),
-      hc.reason === 'not_installed' || /install/i.test(hc.reason || '') ? 'Install "Health Connect" from the Play Store (built into Android 14 and later), then reopen the app.' : `Android reported: ${hc.reason || 'unavailable'}.`));
-  }
-  if (hc.error) el.append(h('div', { class: 'msg err', id: 'health-error' }, h('strong', { text: hc.error.title }), hc.error.text));
-  if (hc.busy) {
-    const p = hc.progress;
-    el.append(h('p', { class: 'muted', style: { margin: 0 }, text: p?.phase && p.phase !== 'done' ? `Reading ${HC_PHASES[p.phase] || p.phase}… (${p.done + 1} of ${p.total})` : 'Reading Health Connect…' }));
-  } else if (src?.at) {
-    const r = hc.report;
-    const parts = [`Last sync ${when(src.at)}`];
-    if (r) parts.push(`${plural(r.days, 'day')}, ${plural(r.nights, 'night')} and ${plural(r.workouts, 'workout')} read`);
-    if (src.range?.to) parts.push(`data up to ${fmtDate(src.range.to)}`);
-    el.append(h('p', { class: 'muted', style: { margin: 0 }, id: 'health-summary', text: `${parts.join(' · ')}.` }));
-    if (r?.skipped?.length) el.append(h('p', { class: 'muted', style: { margin: 0, fontSize: '12px' }, text: `Not read: ${r.skipped.map((x) => x.split(':')[0]).map((k) => HC_PHASES[k] || k).join(', ')} (not allowed, or Health Connect refused).` }));
-  }
-  if (hc.status === 'ready' && !hc.history) {
-    el.append(h('p', { class: 'muted', style: { margin: 0, fontSize: '12px' }, text: 'Health Connect only shares the last 30 days unless you also allow "Access past data". The Huawei export covers older history.' }));
-  }
-  const row = h('div', { class: 'btn-row' });
-  if (hc.status === 'prompt') row.append(h('button', { class: 'btn primary', type: 'button', id: 'health-connect', onclick: () => ctx.actions.connectHealth() }, 'Connect Health Connect'));
-  if (hc.status === 'ready') {
-    row.append(h('button', { class: 'btn primary', type: 'button', id: 'health-sync', disabled: Boolean(hc.busy), onclick: () => ctx.actions.syncHealth() }, hc.busy ? 'Syncing…' : 'Sync now'));
-    row.append(h('button', { class: 'btn', type: 'button', onclick: () => ctx.actions.connectHealth() }, 'Allow more data'));
-  }
-  if (hc.status === 'ready' || hc.status === 'prompt') row.append(h('button', { class: 'btn', type: 'button', onclick: () => ctx.actions.openHealthSettings() }, 'Health Connect settings'));
-  if (row.childNodes.length) el.append(row);
-  el.append(guide('Set it up', [
-    ['Install ', h('b', { text: 'Health Sync' }), ' from the Play Store (one-week trial, then a small one-time fee).'],
-    ['In Health Sync choose ', h('b', { text: 'Huawei Health' }), ' as the source and ', h('b', { text: 'Health Connect' }), ' as the destination. Turn on steps, heart rate, sleep, activities and, if offered, SpO2 and HRV.'],
-    ['Press ', h('b', { text: 'Connect Health Connect' }), ' here and allow the data types (and "Access past data" for more than 30 days).'],
-    ['From then on the app syncs by itself when you open it.'],
-  ], !src?.at));
-}
-
-/** intervals.icu with your own API key (app); main.js redraws it in place while syncing. */
-export function renderIntervalsCard(el, ctx) {
-  clear(el);
-  const iv = ctx.intervals || {};
-  const src = ctx.meta?.sources?.intervals;
-  const secrets = ctx.runtime?.secrets;
-  const hasKey = Boolean(secrets?.get('intervals'));
-  const chip = iv.busy ? { cls: '', text: 'Syncing…' } : iv.error ? { cls: 'bad', text: 'Sync failed' } : hasKey ? { cls: 'ok', text: 'Connected' } : { cls: '', text: 'Not connected' };
-  el.append(h('div', { class: 'section-head' },
-    h('h3', { class: 'chart-title', text: 'intervals.icu' }),
-    h('span', { class: `chip ${chip.cls}`, id: 'intervals-status' }, h('span', { class: 'dot' }), chip.text)));
-  el.append(h('p', { style: { margin: 0 }, text: 'Automatic and free: Huawei Health syncs workouts (with GPS and heart rate) and wellness to intervals.icu, and the app reads them with your personal API key. The key stays on this device.' }));
-  if (iv.error) el.append(h('div', { class: 'msg err', id: 'intervals-error' }, h('strong', { text: iv.error.title }), iv.error.text));
-  if (iv.busy) {
-    const p = iv.progress;
-    el.append(h('p', { class: 'muted', style: { margin: 0 }, text: p?.phase === 'streams' && p.total ? `Downloading routes ${p.done + 1} of ${p.total}…` : 'Listing activities…' }));
-  } else if (src?.at) {
-    const r = iv.report;
-    const parts = [`Last sync ${when(src.at)}`];
-    if (r) parts.push(`${fmtInt(r.activities)} ${r.activities === 1 ? 'activity' : 'activities'} (${r.withStreams} with new routes), ${plural(r.wellnessDays, 'day')} of wellness`);
-    if (src.range?.to) parts.push(`data up to ${fmtDate(src.range.to)}`);
-    el.append(h('p', { class: 'muted', style: { margin: 0 }, id: 'intervals-summary', text: `${parts.join(' · ')}.` }));
-  }
-  if (hasKey) {
-    el.append(h('div', { class: 'btn-row' },
-      h('button', { class: 'btn primary', type: 'button', id: 'intervals-sync', disabled: Boolean(iv.busy), onclick: () => ctx.actions.syncIntervals() }, iv.busy ? 'Syncing…' : 'Sync now'),
-      h('button', { class: 'btn', type: 'button', onclick: () => ctx.actions.saveIntervals({ apiKey: null, athleteId: null }) }, 'Forget key')));
-    return;
-  }
-  const key = h('input', { id: 'intervals-key', type: 'password', autocomplete: 'off', placeholder: 'API key' });
-  const athlete = h('input', { id: 'intervals-athlete', autocomplete: 'off', placeholder: 'Optional, e.g. i123456', value: ctx.settings?.intervalsAthlete || '' });
-  const form = h('form', { style: { display: 'flex', flexDirection: 'column', gap: '10px' }, onsubmit: (e) => {
-    e.preventDefault();
-    if (!key.value.trim()) return key.focus();
-    ctx.actions.saveIntervals({ apiKey: key.value.trim(), athleteId: athlete.value.trim() });
-  } },
-  h('div', { class: 'fields' },
-    h('div', { class: 'field' }, h('label', { for: 'intervals-key', text: 'API key' }), key),
-    h('div', { class: 'field' }, h('label', { for: 'intervals-athlete', text: 'Athlete ID' }), athlete)),
-  h('div', { class: 'btn-row' }, h('button', { class: 'btn primary', type: 'submit' }, 'Connect and sync')));
-  el.append(form, guide('Set it up', [
-    ['Create a free account at ', h('b', { text: 'intervals.icu' }), ' → Settings → Connections → ', h('b', { text: 'HUAWEI Health' }), ', and allow the link in Huawei Health.'],
-    ['In intervals.icu open ', h('b', { text: 'Settings → Developer settings' }), ' and copy the ', h('b', { text: 'API key' }), ' (and your athlete ID, shown there too).'],
-    ['Paste them here. The first sync reads the last 12 months; later ones only what is new.'],
-  ], true));
-}
-
 export function renderData(root, ctx) {
   const { meta, isSample, runtime, store } = ctx;
   const app = Boolean(ctx.platform?.app);
@@ -324,27 +137,26 @@ export function renderData(root, ctx) {
 
   // ---------------------------------------------------------- import export
   const pwd = h('input', { id: 'zip-password', type: 'password', autocomplete: 'off', placeholder: 'Password you chose when requesting it' });
-  const fileInput = h('input', { id: 'zip-file', type: 'file', accept: '.zip,application/zip,.json', multiple: true, hidden: true });
-  const folderInput = h('input', { id: 'zip-folder', type: 'file', webkitdirectory: true, multiple: true, hidden: true });
+  const fileInput = h('input', { id: 'zip-file', type: 'file', accept: '.zip,application/zip', hidden: true });
   const progress = h('div', { class: 'progress', hidden: true }, h('div'));
   const result = h('div');
   const chosen = h('p', { class: 'muted', text: 'No file chosen' });
   let files = [];
+  // The only way data comes in: the ZIP downloaded from Huawei.
   const pick = (list) => {
-    files = [...list];
-    chosen.textContent = files.length === 1 ? `${files[0].name} · ${(files[0].size / 1e6).toFixed(1)} MB` : `${files.length} files selected`;
+    const zip = [...list].find((f) => /\.zip$/i.test(f.name));
+    files = zip ? [zip] : [];
+    chosen.textContent = zip ? `${zip.name} · ${(zip.size / 1e6).toFixed(1)} MB` : 'That is not a ZIP file. Choose the ZIP you downloaded from Huawei.';
     go.disabled = !files.length;
   };
   fileInput.addEventListener('change', () => pick(fileInput.files));
-  folderInput.addEventListener('change', () => pick(folderInput.files));
   const go = h('button', { class: 'btn primary', type: 'button', disabled: true }, 'Import');
   const drop = h('div', { class: 'dropzone', id: 'dropzone' },
     h('p', null, h('b', { text: 'Drop your Huawei export ZIP here' })),
-    h('p', { class: 'muted', text: native ? 'Choose the ZIP you downloaded from Huawei. Everything is decrypted and read on your phone.' : 'Or choose the extracted folder. Everything is decrypted and read in your browser.' }),
+    h('p', { class: 'muted', text: `The ZIP you downloaded from Huawei, as it is. Everything is decrypted and read ${native ? 'on your phone' : 'in your browser'}.` }),
     h('div', { class: 'btn-row', style: { justifyContent: 'center' } },
-      h('button', { class: 'btn', type: 'button', onclick: () => fileInput.click() }, 'Choose ZIP'),
-      native ? null : h('button', { class: 'btn', type: 'button', onclick: () => folderInput.click() }, 'Choose folder')),
-    chosen, fileInput, folderInput);
+      h('button', { class: 'btn', type: 'button', onclick: () => fileInput.click() }, 'Choose ZIP')),
+    chosen, fileInput);
   drop.addEventListener('dragover', (e) => { e.preventDefault(); drop.classList.add('over'); });
   drop.addEventListener('dragleave', () => drop.classList.remove('over'));
   drop.addEventListener('drop', (e) => {
@@ -385,53 +197,10 @@ export function renderData(root, ctx) {
       ['Download the ZIP and drop it above with the same password. Repeat whenever you want to refresh your full history.'],
     ], isSample));
 
-  // ---------------------------------------------------------- GPX/TCX/CSV files
-  const actInput = h('input', { id: 'act-files', type: 'file', accept: '.gpx,.tcx,.csv', multiple: true, hidden: true });
-  const actResult = h('div');
-  actInput.addEventListener('change', async () => {
-    clear(actResult);
-    try {
-      await ctx.actions.importActivityFiles([...actInput.files]);
-    } catch (e) {
-      actResult.append(h('div', { class: 'msg err' }, e.message || String(e)));
-    }
-    actInput.value = '';
-  });
-  const filesPanel = h('div', { class: 'panel', style: { display: 'flex', flexDirection: 'column', gap: '10px' } },
-    h('p', { style: { margin: 0 }, text: 'Add single workouts between exports: in Huawei Health open a workout, tap the route or share icon and export GPX. Health Sync CSV, GPX and TCX files work too.' }),
-    h('div', { class: 'btn-row' }, h('button', { class: 'btn', type: 'button', onclick: () => actInput.click() }, 'Add GPX / TCX / CSV files'), actInput),
-    actResult);
-
   const flash = ctx.takeFlash?.();
-  if (flash && flash.target !== 'map' && flash.title !== 'Backup restored') (flash.target === 'files' ? actResult : result).append(h('div', { class: 'msg ok' }, h('strong', { text: flash.title }), flash.text));
-  root.append(section('Import your Huawei export', 'The complete history: workouts with GPS, steps, heart rate, sleep, SpO2 and stress.', importPanel));
-  root.append(section('Add individual files', null, filesPanel));
+  if (flash && flash.target !== 'map') result.append(h('div', { class: 'msg ok' }, h('strong', { text: flash.title }), flash.text));
+  root.append(section('Import your Huawei export', 'The only source of data: workouts with GPS, steps, heart rate, sleep, SpO2 and stress, all from the ZIP Huawei sends you.', importPanel));
   root.append(section('Map', 'Streets, paths, parks and water under your routes', mapCard(ctx, flash?.target === 'map' ? flash : null)));
-
-  // ---------------------------------------------------------- automatic sources
-  const srcCard = (title, state, body) => h('div', { class: 'panel span-6', style: { display: 'flex', flexDirection: 'column', gap: '10px' } },
-    h('div', { class: 'section-head' }, h('h3', { class: 'chart-title', text: title }), h('span', { class: `chip ${state.cls}` }, h('span', { class: 'dot' }), state.text)),
-    ...body);
-  const drive = h('div', { class: 'panel span-6', id: 'drive-card', style: { display: 'flex', flexDirection: 'column', gap: '10px' } });
-  renderDriveCard(drive, ctx);
-  const bridge = srcCard('intervals.icu · GT2 Bridge', { cls: '', text: 'Not connected yet' }, [
-    h('p', { style: { margin: 0 }, text: 'Automatic and free: Huawei Health syncs to intervals.icu natively, and a small connector you deploy on Cloudflare (free tier) lets this page read it.' }),
-    guide('Set it up', [
-      ['Create a free account at ', h('b', { text: 'intervals.icu' }), ' → Settings → Connections → ', h('b', { text: 'HUAWEI Health' }), '; then in Huawei Health allow the Health Service Kit link.'],
-      ['In intervals.icu → Settings → Developer, copy your ', h('b', { text: 'API key' }), '.'],
-      ['Deploy the ', h('code', { text: 'bridge/' }), ' folder of the GitHub repo with Cloudflare Workers (see ', h('code', { text: 'docs/setup-intervals-bridge.md' }), ').'],
-      ['In claude.ai add a custom connector named ', h('b', { text: 'GT2 Bridge' }), ' with the worker URL, then tell Claude it is done.'],
-    ]),
-  ]);
-  if (app) {
-    const health = h('div', { class: 'panel span-6', id: 'health-card', style: { display: 'flex', flexDirection: 'column', gap: '10px' } });
-    renderHealthCard(health, ctx);
-    const iv = h('div', { class: 'panel span-6', id: 'intervals-card', style: { display: 'flex', flexDirection: 'column', gap: '10px' } });
-    renderIntervalsCard(iv, ctx);
-    root.append(section('Automatic updates', 'Optional. Keep the export for full history; these fill in new days between exports.', h('div', { class: 'grid' }, health, iv)));
-  } else {
-    root.append(section('Automatic updates', 'Optional. Keep the export for full history; these fill in new days between exports.', h('div', { class: 'grid' }, drive, bridge)));
-  }
 
   // ---------------------------------------------------------- history
   const imports = (meta.imports || []).slice().reverse();
@@ -463,26 +232,7 @@ export function renderData(root, ctx) {
       h('button', { class: 'btn', type: 'button', onclick: () => ctx.actions.exportRoutesInRange('gpx') }, 'GPX routes (selected period)'),
       h('button', { class: 'btn', type: 'button', onclick: () => ctx.actions.exportRoutesInRange('tcx') }, 'TCX (selected period)'),
       h('button', { class: 'btn', type: 'button', onclick: () => ctx.actions.exportBackup() }, 'Full backup (JSON)')));
-  const restoreInput = h('input', { id: 'backup-file', type: 'file', accept: '.json,application/json', hidden: true });
-  const restoreResult = h('div');
-  restoreInput.addEventListener('change', async () => {
-    const file = restoreInput.files?.[0];
-    restoreInput.value = '';
-    if (!file) return;
-    clear(restoreResult);
-    try {
-      await ctx.actions.restoreBackup(file);
-    } catch (e) {
-      restoreResult.append(h('div', { class: 'msg err' }, h('strong', { text: 'Not restored' }), e?.message || String(e)));
-    }
-  });
-  ex.append(h('div', { class: 'btn-row' },
-    h('button', { class: 'btn', type: 'button', id: 'backup-restore', onclick: () => {
-      if (isSample || window.confirm('Restoring replaces every day, workout, route and setting stored here with the backup. Continue?')) restoreInput.click();
-    } }, 'Restore a backup…'),
-    h('span', { class: 'muted', text: 'Moves your logbook to a new phone or back after reinstalling.' }), restoreInput), restoreResult);
-  if (flash && flash.title === 'Backup restored') restoreResult.append(h('div', { class: 'msg ok' }, h('strong', { text: flash.title }), flash.text));
-  root.append(section('Export and backup', null, ex));
+  root.append(section('Export', null, ex));
 
   // ---------------------------------------------------------- settings
   const s = ctx.settings;

@@ -1,13 +1,11 @@
 // The app builds (entry: app-entry.js). On Android, Capacitor plugins give the
-// page on-device storage, the share sheet for exports, HTTP without CORS
-// (intervals.icu) and Health Connect. Opened in a browser, the same build uses
-// IndexedDB and ordinary downloads.
+// page on-device storage, the share sheet for exports and the back button.
+// Opened in a browser, the same build uses IndexedDB and ordinary downloads.
 
-import { Capacitor, CapacitorHttp } from '@capacitor/core';
+import { Capacitor } from '@capacitor/core';
 import { Filesystem, Directory, Encoding } from '@capacitor/filesystem';
 import { Share } from '@capacitor/share';
 import { App } from '@capacitor/app';
-import { Health } from '@capgo/capacitor-health';
 import { setPlatform } from './platform.js';
 import { FsDocs, IdbDocs } from './local-docs.js';
 import { askClaude, MODELS, DEFAULT_MODEL } from './claude-api.js';
@@ -58,30 +56,6 @@ const browserDownloads = {
   },
 };
 
-// ------------------------------------------------------------------ http
-
-/**
- * GET JSON or text from another site: natively (no CORS) in the app, else fetch.
- * Resolves {status, data}; data is parsed JSON when the response is JSON.
- */
-async function httpGet(url, { headers = {}, timeout = 120000 } = {}) {
-  if (native) {
-    const res = await CapacitorHttp.get({ url, headers, connectTimeout: timeout, readTimeout: timeout });
-    return { status: res.status, data: res.data };
-  }
-  const ctl = new AbortController();
-  const timer = setTimeout(() => ctl.abort(), timeout);
-  try {
-    const res = await fetch(url, { headers, signal: ctl.signal });
-    const text = await res.text();
-    let data = text;
-    try { data = JSON.parse(text); } catch { /* text */ }
-    return { status: res.status, data };
-  } finally {
-    clearTimeout(timer);
-  }
-}
-
 // ------------------------------------------------------------------ secrets
 
 /** API keys stay on this device (app-private storage), never in exports or backups. */
@@ -115,7 +89,6 @@ if (native) {
     else if (route && route !== 'overview') location.hash = 'overview';
     else App.exitApp();
   });
-  App.addListener('resume', () => window.dispatchEvent(new Event('gt2-resume')));
   document.documentElement.classList.add('native');
 }
 
@@ -128,9 +101,8 @@ setPlatform({
     return {
       db, uid: 'local', storeKind: 'device',
       downloads: native ? nativeDownloads : browserDownloads,
-      sample: null, mcp: null, permissions: null, user: null, inViewer: false,
-      http: httpGet, secrets, native,
-      health: native ? Health : null,
+      sample: null, user: null, inViewer: false,
+      secrets, native,
       ai: { ask: askClaude, models: MODELS, defaultModel: DEFAULT_MODEL },
       openUrl: (url) => window.open(url, '_blank', 'noopener'),
     };

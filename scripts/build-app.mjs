@@ -57,7 +57,7 @@ const html = `<!doctype html>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="color-scheme" content="light dark">
-<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'unsafe-inline' blob:; worker-src 'self' blob:; style-src 'self' 'unsafe-inline'; font-src 'self'; img-src 'self' data: blob:; connect-src 'self' https://api.anthropic.com https://intervals.icu https://overpass-api.de">
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'unsafe-inline' blob:; worker-src 'self' blob:; style-src 'self' 'unsafe-inline'; font-src 'self'; img-src 'self' data: blob:; connect-src 'self' https://api.anthropic.com https://overpass-api.de">
 <title>GT 2 Logbook</title>
 <style>
 ${fontCss}
@@ -70,6 +70,4 @@ ${body}
 </html>
 `;
 writeFileSync(`${OUT}/index.html`, html);
-// Shown by Health Connect's "privacy policy" link (the plugin opens public/privacypolicy.html).
-copyFileSync('src/privacypolicy.html', `${OUT}/privacypolicy.html`);
 console.log(`www/index.html + app.js ${(app.outputFiles[0].text.length / 1024).toFixed(0)} KB (worker ${(workerCode.length / 1024).toFixed(0)} KB)`);

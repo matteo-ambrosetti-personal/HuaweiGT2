@@ -1,6 +1,6 @@
 // End-to-end check of the app build (www/, what ships in the APK) at phone
-// size in Chromium: sample data, every tab, an import that survives a
-// reload (IndexedDB), a full backup that restores, and the model tabs.
+// size in Chromium: sample data, every tab, the ZIP import (the only way data
+// comes in) surviving a reload (IndexedDB), the full backup, and the model tabs.
 //   npm run build:app && npm run fixture && npm run test:e2e:app
 
 import { chromium } from 'playwright';
@@ -33,7 +33,7 @@ const step = (name) => console.log(`• ${name}`);
 process.on('exit', () => { if (errors.length) console.error('Browser errors:\n' + errors.join('\n')); });
 
 const ctx = await browser.newContext({ viewport: { width: 393, height: 852 }, deviceScaleFactor: 2, isMobile: true, hasTouch: true, acceptDownloads: true });
-// The app makes no requests beyond its own files (sync and Ask Claude need a user action).
+// The app makes no requests beyond its own files (the map and Ask Claude need a user action).
 await ctx.route('**/*', (route) => {
   const u = new URL(route.request().url());
   if (u.hostname !== '127.0.0.1') {
@@ -88,11 +88,15 @@ await page.goto(`${url}#ask`);
 await page.waitForSelector('#anthropic-key');
 assert.equal(await page.$eval('#ask-model', (s) => s.value), 'claude-opus-5-5');
 
-step('data: Health Connect is Android-only, intervals.icu takes a key, the map downloads in one step');
+step('data: the export ZIP is the only way in');
 await page.goto(`${url}#data`);
-await page.waitForSelector('#health-card');
-assert.match(await page.textContent('#health-status'), /Android app only/);
-await page.waitForSelector('#intervals-key');
+await page.waitForSelector('#zip-file', { state: 'attached' });
+const inputs = await page.$$eval('input[type=file]', (els) => els.map((e) => e.id).filter((id) => id !== 'map-file'));
+assert.deepEqual(inputs, ['zip-file']);
+for (const gone of ['#health-card', '#intervals-key', '#drive-sync', '#backup-restore']) assert.equal(await page.$(gone), null, `${gone} is gone`);
+await page.waitForSelector('#map-card');
+// Deleting takes two taps: the confirmation is hidden until the first.
+assert.equal(await page.getByRole('button', { name: 'Yes, delete everything' }).isVisible(), false);
 
 step('import the fixture and keep it after a reload');
 await page.setInputFiles('#zip-file', FIXTURE);
@@ -109,22 +113,12 @@ await page.click('tbody tr.clickable');
 await page.waitForSelector('#workout-models .stat');
 await page.screenshot({ path: `${SHOTS}/workout.png`, fullPage: true });
 
-step('full backup downloads with the routes, and restores');
+step('full backup downloads with the routes');
 await page.goto(`${url}#data`);
 const [download] = await Promise.all([page.waitForEvent('download'), page.getByRole('button', { name: 'Full backup (JSON)' }).click()]);
-const file = await download.path();
-const backup = JSON.parse(readFileSync(file, 'utf8'));
+const backup = JSON.parse(readFileSync(await download.path(), 'utf8'));
 assert.equal(backup.app, 'GT 2 Logbook');
 assert.ok(Object.keys(backup.tracks).length > 10, 'routes are in the backup');
-page.once('dialog', (d) => d.accept());
-const [chooser] = await Promise.all([page.waitForEvent('filechooser'), page.click('#backup-restore')]);
-await chooser.setFiles(file);
-await page.waitForSelector('.msg.ok:has-text("Backup restored")', { timeout: 60000 });
-await page.waitForFunction(() => !/Saving|Restoring/.test(document.getElementById('status-chips').textContent), null, { timeout: 60000 });
-await page.reload();
-await page.goto(`${url}#workouts`);
-await page.waitForSelector('tbody tr.clickable');
-assert.equal(await page.$('.chip.sample'), null);
 
 step('real data on the model tabs');
 for (const t of ['insights', 'training', 'sleep', 'heart']) {

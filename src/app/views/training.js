@@ -21,7 +21,7 @@ export function renderTraining(root, ctx) {
   const { ds, settings, range } = ctx;
   const a = analyze(ds, settings);
   if (!a.last || !a.pmc.length) {
-    root.append(emptyState('No training load yet', 'Training load comes from workouts with heart rate. Import your export, or sync Health Connect or intervals.icu.', h('a', { class: 'btn primary', href: '#data' }, 'Import data')));
+    root.append(emptyState('No training load yet', 'Training load comes from workouts with heart rate. Import your Huawei export to see it.', h('a', { class: 'btn primary', href: '#data' }, 'Import data')));
     return;
   }
   const inRange = (r) => r.date >= range.from && r.date <= range.to;
