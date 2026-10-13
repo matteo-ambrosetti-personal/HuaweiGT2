@@ -4,6 +4,15 @@ import { CloudStore, MemoryStore, defaultMeta } from '../src/app/store.js';
 import { emptyIndex } from '../src/app/sync-drive.js';
 import { emptyDataset, mergeDataset } from '../src/lib/model.js';
 
+// Like the platform's db, reads hand back deep-frozen bodies.
+function deepFreeze(v) {
+  if (v && typeof v === 'object') {
+    for (const x of Object.values(v)) deepFreeze(x);
+    Object.freeze(v);
+  }
+  return v;
+}
+
 // In-memory stand-in for the artifact db (documents addressed by path).
 function fakeDb() {
   const docs = new Map();
@@ -16,7 +25,7 @@ function fakeDb() {
           const out = [];
           for (const [p, data] of docs) {
             const rest = p.startsWith(`${path}/`) ? p.slice(path.length + 1) : null;
-            if (rest && !rest.includes('/')) out.push({ id: rest, data: () => structuredClone(data) });
+            if (rest && !rest.includes('/')) out.push({ id: rest, data: () => deepFreeze(structuredClone(data)) });
           }
           return { docs: out };
         },
@@ -24,7 +33,7 @@ function fakeDb() {
     },
     doc(path) {
       return {
-        async get() { return { exists: docs.has(path), data: () => structuredClone(docs.get(path)) }; },
+        async get() { return { exists: docs.has(path), data: () => (docs.has(path) ? deepFreeze(structuredClone(docs.get(path))) : undefined) }; },
         async set(body) { docs.set(path, structuredClone(body)); },
         async delete() { docs.delete(path); },
       };
@@ -67,4 +76,32 @@ test('the memory store keeps the sync index across saves', async () => {
   await mem.save(ds, defaultMeta());
   await mem.saveMeta(defaultMeta());
   assert.deepEqual((await mem.load()).syncIndex, index);
+});
+
+test('data loaded from storage can be updated (snapshots are frozen)', async () => {
+  const db = fakeDb();
+  const store = new CloudStore(db, 'u2');
+  const ds = emptyDataset();
+  mergeDataset(ds, { days: { '2026-03-08': { steps: 75 } } }, 'healthsync');
+  const w = { id: 'hw-1', date: '2026-03-08', start: Date.UTC(2026, 2, 8, 7), duration: 600, family: 'other', label: 'Type NaN' };
+  mergeDataset(ds, { workouts: { 'hw-1': w } }, 'export');
+  await store.save(ds, defaultMeta());
+
+  const loaded = await store.load();
+  // A higher-ranked source updates a day that came from storage...
+  mergeDataset(loaded.ds, { days: { '2026-03-08': { steps: 80, distance: 50 } } }, 'export');
+  assert.equal(loaded.ds.days['2026-03-08'].steps, 80);
+  assert.equal(loaded.ds.days['2026-03-08'].src.steps, 'export');
+  // ...a re-import replaces a stored workout...
+  mergeDataset(loaded.ds, { workouts: { 'hw-1': { ...w, family: 'run', label: 'Outdoor run', distance: 1800 } } }, 'export');
+  assert.equal(loaded.ds.workouts['hw-1'].family, 'run');
+  // ...and saving records the new hashes and tracks.
+  const before = { ...loaded.meta.hashes };
+  await store.save(loaded.ds, loaded.meta, { tracks: { 'hw-1': { id: 'hw-1', n: 2, step: 1, t0: 0, d: [0, 1] } } });
+  assert.notEqual(loaded.meta.hashes['days-2026-03'], before['days-2026-03']);
+  assert.equal(loaded.meta.tracks['hw-1'], 1);
+  const again = await store.load();
+  assert.equal(again.ds.days['2026-03-08'].steps, 80);
+  assert.equal(again.meta.tracks['hw-1'], 1);
+  assert.deepEqual((await store.loadTrack('hw-1')).d, [0, 1]);
 });

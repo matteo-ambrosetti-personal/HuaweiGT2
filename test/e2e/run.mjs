@@ -100,6 +100,17 @@ await page.waitForTimeout(400);
 await page.click('.seg button:has-text("30D")');
 await page.waitForTimeout(300);
 
+step('an empty period points to where the data is');
+await page.goto(url + '#workouts');
+await page.click('.seg button:has-text("Custom")');
+await page.fill('#range-from', '2020-01-01');
+await page.fill('#range-to', '2020-01-31');
+await page.dispatchEvent('#range-to', 'change');
+await page.waitForSelector('.empty-state:has-text("Your workouts run from")');
+await page.getByRole('button', { name: 'Show that period' }).click();
+await page.waitForSelector('tbody tr.clickable');
+await page.click('.seg button:has-text("1Y")');
+
 step('workout detail with route and splits');
 await page.goto(url + '#workouts');
 await page.waitForSelector('tbody tr.clickable');

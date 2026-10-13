@@ -61,6 +61,14 @@ const actions = {
   openWorkout(id) {
     location.hash = `workout-${encodeURIComponent(id)}`;
   },
+  /** Switch the period to a custom span (used by "Show that period"). */
+  showRange(from, to) {
+    state.filter.preset = 'custom';
+    state.filter.custom = { from, to };
+    saveFilter();
+    render();
+    window.scrollTo({ top: 0 });
+  },
   focusDay(date) {
     const ws = Object.values(state.ds.workouts).filter((w) => w.date === date);
     if (ws.length === 1) return actions.openWorkout(ws[0].id);

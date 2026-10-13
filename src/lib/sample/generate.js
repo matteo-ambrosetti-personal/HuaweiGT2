@@ -338,6 +338,7 @@ export function generateExport(opts = {}) {
       partTimeMap: Object.fromEntries(partTimes.map((c, i) => [String(i + 1), c])),
       wearSportData: { max_met: 0, load_peak: 120, etraining_effect: 32, recovery_time: 840 },
     };
+    const modern = recordSeq % 3 === 0; // every third workout in the 2026 layout
     const id = `wk${recordSeq++}`;
     const base = {
       abnormalTrack: 0, appType: 0, dataId: recordSeq, deviceCode: 277420141, duplicateTrack: 0,
@@ -347,6 +348,15 @@ export function generateExport(opts = {}) {
     };
     const bare = '{' + partTimes.map((c, i) => `${i + 1}.0:${c}.0`).join(',') + '}';
     const serialize = (detailLines) => {
+      if (modern) {
+        // 2026 exports: detail lines and summary JSON in their own fields, no top-level totals.
+        return JSON.stringify({
+          appType: 1, dataId: base.dataId, dataSource: 0, detailData: detailLines.join('\n') + '\n',
+          deviceCode: base.deviceCode, endTime: base.endTime, mergedFlag: 0, modifiedTime: base.endTime + 60000,
+          recordId: id, startTime: start, subType: OUTER[kind], summaryData: JSON.stringify(summary),
+          timeZone: tz, tr: { ct: 0, lt: 0, mt: 0, mts: 0 }, type: 30001, version: base.endTime,
+        });
+      }
       const attribute = 'HW_EXT_TRACK_DETAIL@is' + detailLines.join('\n') + '\n&&HW_EXT_TRACK_SIMPLIFY@is' + JSON.stringify(summary);
       const json = JSON.stringify({ ...base, attribute });
       // Huawei writes partTimeMap with bare numeric keys (invalid JSON).

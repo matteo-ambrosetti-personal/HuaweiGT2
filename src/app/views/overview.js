@@ -1,6 +1,6 @@
 import { h, chartCard, section, compact, emptyState } from '../ui.js';
 import { dial, calendarHeatmap, stackedBars, routeThumb } from '../charts.js';
-import { tile, bucketColor, paceOrSpeed, workoutTitle, workoutWhen, distanceText, durationText, weeklySpark } from './common.js';
+import { tile, bucketColor, paceOrSpeed, workoutTitle, workoutWhen, distanceText, durationText, weeklySpark, dataSpan } from './common.js';
 import { summarize, change, comparable, daySeries, weeklyVolume, workoutsIn, latestDate } from '../../lib/stats.js';
 import { fmtInt, fmtHoursMinutes, fmtSleep, fmtKm, fmtDate, addDays } from '../../lib/format.js';
 import { BUCKETS, BUCKET_LABELS } from '../../lib/huawei/sport-types.js';
@@ -104,7 +104,11 @@ export function renderOverview(root, ctx) {
   const list = h('div', { class: 'panel span-5' },
     h('div', { class: 'section-head' }, h('h3', { class: 'chart-title', text: 'Latest workouts' }),
       h('a', { href: '#workouts', class: 'btn', style: { padding: '3px 10px', fontSize: '12px' } }, 'All workouts')));
-  if (!recent.length) list.append(h('p', { class: 'muted', text: 'No workouts in this period.' }));
+  const span = recent.length ? null : dataSpan(Object.values(ds.workouts).map((w) => w.date));
+  if (span) {
+    list.append(h('p', { class: 'muted', text: `No workouts in this period. Yours run from ${fmtDate(span.from)} to ${fmtDate(span.to)}.` }),
+      h('button', { class: 'btn', type: 'button', onclick: () => ctx.actions.showRange(span.from, span.to) }, 'Show that period'));
+  } else if (!recent.length) list.append(h('p', { class: 'muted', text: 'No workouts in this period.' }));
   else {
     const tb = h('tbody');
     for (const w of recent) {

@@ -1,6 +1,6 @@
 // Shared pieces for views: stat tiles, workout formatting, period labels.
 
-import { h } from '../ui.js';
+import { h, emptyState } from '../ui.js';
 import { sparkline } from '../charts.js';
 import { fmtPace, fmtSpeed, fmtKm, fmtDuration, fmtDate, fmtClock } from '../../lib/format.js';
 import { chartBucket, BUCKET_LABELS } from '../../lib/huawei/sport-types.js';
@@ -88,4 +88,22 @@ export function weeklySpark(rows, field, agg = 'mean') {
     else out.push(agg === 'sum' ? chunk.reduce((a, b) => a + b, 0) : chunk.reduce((a, b) => a + b, 0) / chunk.length);
   }
   return out;
+}
+
+/** First and last of a list of "YYYY-MM-DD" keys ({from, to}), or null when empty. */
+export function dataSpan(dates) {
+  const sorted = dates.filter(Boolean).sort();
+  return sorted.length ? { from: sorted[0], to: sorted.at(-1) } : null;
+}
+
+/**
+ * Empty state for a period that holds none of a kind of data that exists at
+ * other dates: says where it is and offers a button showing that span.
+ * Returns null when there is none at all (callers keep their usual message).
+ */
+export function emptyElsewhere(ctx, { title, dates, span, one }) {
+  const s = dataSpan(dates);
+  if (!s) return null;
+  const text = s.from === s.to ? one(fmtDate(s.from)) : span(fmtDate(s.from), fmtDate(s.to));
+  return emptyState(title, text, h('button', { class: 'btn primary', type: 'button', onclick: () => ctx.actions.showRange(s.from, s.to) }, 'Show that period'));
 }

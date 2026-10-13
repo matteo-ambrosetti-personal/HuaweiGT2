@@ -103,6 +103,28 @@ test('normalises a motion record: units, sport, splits from partTimeMap', () => 
   assert.ok(workout.hrHist.secs.length > 0);
   assert.ok(track.n > 100 && track.n <= 1000);
   assert.equal(track.hr.length, track.n);
+
+  // The 2026 layout of the same workout: detail lines and summary JSON in
+  // their own fields, the totals only inside the summary.
+  const modern = {
+    appType: 1, dataSource: 0, recordId: 'abc', startTime: start, endTime: start + 600000, timeZone: '+0200',
+    type: 30001, subType: 4, detailData: lines.join('\n') + '\n',
+    summaryData: JSON.stringify({
+      avgPace: 333.3, avgHeartRate: 144, creepingWave: 125, mTotalDescent: 90, sportType: 258, partTimeMap: { 1: 333 },
+      totalTime: 600000, totalDistance: 1800, totalCalories: 120500, totalSteps: 1700,
+    }),
+  };
+  const twin = normalizeMotionRecord(modern);
+  for (const k of ['id', 'family', 'label', 'distance', 'duration', 'kcal', 'steps', 'ascent', 'descent', 'date', 'avgHr', 'gpsPoints', 'hasTrack']) {
+    assert.deepEqual(twin.workout[k], workout[k], k);
+  }
+  assert.equal(twin.workout.splits.length, 1);
+  assert.equal(twin.track.n, track.n);
+  // Unknown codes still read their totals and track.
+  const odd = normalizeMotionRecord({ ...modern, summaryData: modern.summaryData.replace('"sportType":258', '"sportType":227') });
+  assert.equal(odd.workout.label, 'Type 227');
+  assert.equal(odd.workout.distance, 1800);
+  assert.ok(odd.track);
 });
 
 test('health values: numeric strings and JSON strings', () => {

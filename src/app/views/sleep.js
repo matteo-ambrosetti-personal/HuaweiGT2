@@ -1,6 +1,6 @@
 import { h, chartCard, section, clear, emptyState } from '../ui.js';
 import { stackedBars, rangeBars, columns, hypnogram, lineChart } from '../charts.js';
-import { tile } from './common.js';
+import { tile, emptyElsewhere } from './common.js';
 import { nightsIn, sleepSummary, previousRange, eachDate, bedMinute, weekdayProfile, change } from '../../lib/stats.js';
 import { fmtSleep, fmtDate, fmtMinuteOfDay, weekdayName, localMinuteOfDay, fmtClock } from '../../lib/format.js';
 
@@ -17,7 +17,12 @@ export function renderSleep(root, ctx) {
   const s = sleepSummary(nights);
   const p = sleepSummary(nightsIn(ds, previousRange(range)));
   if (!nights.length) {
-    root.append(emptyState('No sleep in this period', 'Sleep appears here once your export includes TruSleep data. Try a longer period.'));
+    root.append(emptyElsewhere(ctx, {
+      title: 'No sleep in this period',
+      dates: Object.keys(ds.nights),
+      span: (a, b) => `Your recorded nights run from ${a} to ${b}.`,
+      one: (a) => `Your only recorded night is ${a}.`,
+    }) || emptyState('No sleep in this period', 'Sleep appears here once your export includes TruSleep data. Try a longer period.'));
     return;
   }
   const cmp = p.nights > 0 && p.nights >= 0.8 * s.nights;

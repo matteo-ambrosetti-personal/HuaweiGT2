@@ -32,6 +32,20 @@ Units:
 
 `attribute` = `HW_EXT_TRACK_DETAIL@is<lines>&&HW_EXT_TRACK_SIMPLIFY@is<summary JSON>`.
 
+**2026 layout.** Exports from 2026 (seen in an October 2026 export, files at the ZIP root without a `HUAWEI_HEALTH_<ts>/` prefix) store each workout differently:
+
+```
+{type: 30001, subType, startTime, endTime, timeZone: "+0200", recordId,
+ detailData: "<the same tp=… lines>", summaryData: "<the summary JSON as a string>",
+ appType, dataId, dataSource, deviceCode, mergedFlag, modifiedTime, tr, version}
+```
+
+- **What moved:** there is no `attribute`, and no top-level `sportType`, `totalDistance`, `totalTime`, `totalCalories` or `totalSteps`. All of them now sit inside the summary JSON, with the same units as before.
+- **`subType`:** Huawei's field dictionary calls it "for service use only", so the sport is read from the summary's `sportType` (HiHealth codes: 258 outdoor run, 257 outdoor walk). Code 227 is not identified yet.
+- **New detail tags:** `b-p-m`, `pm2`, `bpm2`, `r-r-h`, `apw`, `ext` and `act`. They are counted in the format report and not used yet.
+
+Both layouts are read (`src/lib/huawei/motion.js`), and the synthetic export writes every third workout in the new layout.
+
 - **Detail lines:** `tp=<tag>;k=…;…;`, one per line. Split on `;`; a naive `t=` regex matches inside `lat=`.
 - **Summary:**
 

@@ -1,6 +1,6 @@
 import { h, chartCard, section, clear, emptyState, BUCKET_COLOR } from '../ui.js';
 import { scatterTrend, routeThumb, allRoutes } from '../charts.js';
-import { tile, bucketColor, paceOrSpeed, workoutTitle, distanceText, durationText, sourceBadges } from './common.js';
+import { tile, bucketColor, paceOrSpeed, workoutTitle, distanceText, durationText, sourceBadges, emptyElsewhere } from './common.js';
 import { workoutsIn, rollingMedian } from '../../lib/stats.js';
 import { fmtInt, fmtDate, fmtClock, fmtPace, fmtSpeed, fmtKm, fmtHoursMinutes, fmtOne } from '../../lib/format.js';
 import { chartBucket, BUCKETS, BUCKET_LABELS } from '../../lib/huawei/sport-types.js';
@@ -26,7 +26,12 @@ export function renderWorkouts(root, ctx) {
   const all = workoutsIn(ds, range);
   const list = fams ? all.filter((w) => fams.includes(chartBucket(w.family))) : all;
   if (!all.length) {
-    root.append(emptyState('No workouts in this period', 'Workouts recorded on the watch appear here after an import. Try a longer period.'));
+    root.append(emptyElsewhere(ctx, {
+      title: 'No workouts in this period',
+      dates: Object.values(ds.workouts).map((w) => w.date),
+      span: (a, b) => `Your workouts run from ${a} to ${b}.`,
+      one: (a) => `Your only workout is on ${a}.`,
+    }) || emptyState('No workouts in this period', 'Workouts recorded on the watch appear here after an import. Try a longer period.'));
     return;
   }
 

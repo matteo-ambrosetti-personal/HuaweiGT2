@@ -1,7 +1,12 @@
 // Workouts from "Motion path detail data" files.
 //
-// Each record is a workout with summary fields plus an `attribute` string:
-//   HW_EXT_TRACK_DETAIL@is<lines>&&HW_EXT_TRACK_SIMPLIFY@is<summary JSON>
+// Each record is a workout. Two layouts exist:
+// - up to 2025: summary fields at the top level (sportType, totalDistance, …)
+//   plus one `attribute` string
+//     HW_EXT_TRACK_DETAIL@is<lines>&&HW_EXT_TRACK_SIMPLIFY@is<summary JSON>
+// - 2026 exports: {type: 30001, subType, startTime, endTime, timeZone, recordId,
+//   detailData: <lines>, summaryData: <summary JSON string>} — the summary JSON
+//   now carries sportType, totalDistance, totalTime, totalCalories, totalSteps.
 // Detail lines look like `tp=lbs;k=1;lat=..;lon=..;alt=..;t=..;` and are
 // separated by newlines. See docs/huawei-export-format.md for every tag.
 
@@ -15,6 +20,18 @@ const SIMPLIFY = 'HW_EXT_TRACK_SIMPLIFY@is';
 
 // Sentinels for unset altitude extremes.
 const isUnsetAlt = (v) => v == null || !Number.isFinite(v) || Math.abs(v) < 1e-30 || Math.abs(v) > 1e30;
+
+/** Summary JSON (a string, possibly with bare numeric keys, or an object) → object or null. */
+function summaryOf(raw) {
+  if (raw && typeof raw === 'object') return raw;
+  if (typeof raw !== 'string' || !raw.trim()) return null;
+  try {
+    const v = parseLenient(raw.trim());
+    return v && typeof v === 'object' ? v : null;
+  } catch {
+    return null;
+  }
+}
 
 /** Split an attribute string into the detail text and the summary text. */
 export function splitAttribute(attr) {
@@ -222,15 +239,11 @@ export function normalizeMotionRecord(rec) {
   if (!start) return null;
   const end = num(rec.endTime) || start;
   const off = tzOffsetMinutes(rec.timeZone);
-  const { detail, summary: summaryText } = splitAttribute(rec.attribute);
-  let summary = null;
-  if (summaryText) {
-    try {
-      summary = parseLenient(summaryText.trim());
-    } catch {
-      summary = null;
-    }
-  }
+  const legacy = splitAttribute(rec.attribute);
+  const detail = typeof rec.detailData === 'string' && rec.detailData ? rec.detailData : legacy.detail;
+  const summary = summaryOf(rec.summaryData) ?? summaryOf(legacy.summary);
+  // `subType` is "for service use only" per Huawei's field dictionary: the
+  // sport comes from sportType (top level up to 2025, in the summary in 2026).
   const sport = sportFromCodes(rec.sportType ?? summary?.sportType, summary?.sportType);
   const durationMs = positive(rec.totalTime) ?? positive(summary?.totalTime);
   const workout = {

@@ -12,7 +12,7 @@ export const state = {
   loading: true,
   route: 'overview',
   param: null,
-  filter: { preset: '90d', custom: null, families: null },
+  filter: { preset: '1y', custom: null, families: null },
   runtime: null,
   store: null,
   importer: null,

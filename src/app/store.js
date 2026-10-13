@@ -58,6 +58,8 @@ export function docsToDataset(docs) {
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 /** Strict JSON copy: drops undefined, turns NaN/Infinity into null. */
 const clean = (body) => JSON.parse(JSON.stringify(body));
+/** Editable deep copy of a (frozen) snapshot body. */
+const mutable = (body) => (body == null ? body : structuredClone(body));
 
 async function withRetry(fn) {
   let unavailableRetried = false;
@@ -142,7 +144,9 @@ export class CloudStore {
     let syncIndex = null;
     const parts = [];
     for (const doc of snap.docs) {
-      const data = doc.data();
+      // Snapshots are frozen: copy them, or later merges into loaded days,
+      // workouts and meta would be silently dropped (the bundle is not strict).
+      const data = mutable(doc.data());
       if (!data) continue;
       if (doc.id === 'meta') meta = { ...defaultMeta(), ...data };
       else if (doc.id === 'diag') diag = data;
@@ -154,7 +158,7 @@ export class CloudStore {
 
   async loadTrack(id) {
     const snap = await withRetry(() => this.db.doc(`${this.base}/tracks/items/${safeId(id)}`).get());
-    return snap.exists ? snap.data() : null;
+    return snap.exists ? mutable(snap.data()) : null;
   }
 
   async saveMeta(meta) {

@@ -1,6 +1,6 @@
 import { h, chartCard, section, emptyState } from '../ui.js';
 import { lineChart, columns } from '../charts.js';
-import { tile, weeklySpark } from './common.js';
+import { tile, weeklySpark, emptyElsewhere } from './common.js';
 import { daySeries, rollingMean, hourProfile, summarize, change, comparable } from '../../lib/stats.js';
 import { fmtDate } from '../../lib/format.js';
 
@@ -13,7 +13,12 @@ export function renderHeart(root, ctx) {
   const old = summarize(ds, prev, settings);
   const has = (f) => rows.some((r) => r[f] != null);
   if (!has('restHr') && !has('hrAvg') && !has('spo2Avg') && !has('stressAvg')) {
-    root.append(emptyState('No heart data in this period', 'Heart rate, SpO2 and stress appear once your export includes them. Try a longer period.'));
+    root.append(emptyElsewhere(ctx, {
+      title: 'No heart data in this period',
+      dates: Object.values(ds.days).filter((d) => d.restHr != null || d.hrAvg != null || d.spo2Avg != null || d.stressAvg != null).map((d) => d.date),
+      span: (a, b) => `Your heart data runs from ${a} to ${b}.`,
+      one: (a) => `Your only heart data is from ${a}.`,
+    }) || emptyState('No heart data in this period', 'Heart rate, SpO2 and stress appear once your export includes them. Try a longer period.'));
     return;
   }
   const cmp = comparable(cur, old);
