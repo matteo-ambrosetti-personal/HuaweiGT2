@@ -23,6 +23,9 @@ export const state = {
   // busy while running, progress {phase, done, total}, error {status, title, text, action?}, report.
   drive: { status: 'checking', busy: false, progress: null, error: null, report: null },
   syncIndex: null, // the stored Drive sync index (doc "hsync")
+  basemapIndex: null, // the stored map's index (doc "basemap")
+  basemap: null, // the stored map, decoded on first use
+  mapRequest: null, // boxes of the last map download the page offered
 };
 
 export function settings() {

@@ -3,6 +3,7 @@ import { fmtDate, fmtInt } from '../../lib/format.js';
 import { SOURCE_LABELS, datasetRange } from '../../lib/model.js';
 import { estimateMaxHr } from '../../lib/stats.js';
 import { skippedFolders } from '../sync-drive.js';
+import { workoutCoverage, MAP_ATTRIBUTION } from '../../lib/basemap.js';
 
 function guide(title, steps, open = false) {
   return h('details', { class: 'guide', open },
@@ -11,6 +12,102 @@ function guide(title, steps, open = false) {
 }
 
 const when = (iso) => new Date(iso).toLocaleString('en-GB', { dateStyle: 'medium', timeStyle: 'short' });
+
+/**
+ * The map card: download OpenStreetMap data for the area around the routes
+ * (a link the browser opens), add the saved file, or remove the map.
+ */
+function mapCard(ctx, flash) {
+  const areas = ctx.basemapIndex?.areas || [];
+  const cells = new Set(areas.flatMap((a) => a.cells || []));
+  const gps = Object.values(ctx.ds.workouts).filter((w) => Array.isArray(w.bbox));
+  const covered = gps.filter((w) => (workoutCoverage(w, cells) ?? 0) >= 0.9).length;
+  const latest = areas.reduce((a, b) => (!a || b.at > a.at ? b : a), null);
+  const panel = h('div', { class: 'panel', id: 'map-card', style: { display: 'flex', flexDirection: 'column', gap: '12px' } });
+  panel.append(h('div', { class: 'section-head' },
+    h('h3', { class: 'chart-title', text: 'OpenStreetMap' }),
+    h('span', { class: `chip ${areas.length ? 'ok' : ''}`, id: 'map-status' }, h('span', { class: 'dot' }), areas.length ? 'On' : 'Not added')));
+  panel.append(h('p', { style: { margin: 0 }, id: 'map-summary', text: areas.length
+    ? `The map covers ${plural(covered, 'route')} of your ${fmtInt(gps.length)}. Downloaded ${fmtDate(latest.at.slice(0, 10))}.`
+    : 'Download the map data for the area around your routes once. The page then draws streets, paths, parks, water and place names under them.' }));
+  const result = h('div', { id: 'map-result' });
+  if (flash) result.append(h('div', { class: 'msg ok' }, h('strong', { text: flash.title }), flash.text));
+  const privacy = h('p', { class: 'muted', style: { margin: 0, fontSize: '12px' },
+    text: `Map data ${MAP_ATTRIBUTION}. OpenStreetMap's server sees which area you download, never your tracks. The map is saved in your private storage, next to your health data.` });
+
+  if (ctx.isSample || !gps.length) {
+    panel.append(h('p', { class: 'muted', style: { margin: 0 }, text: ctx.isSample
+      ? 'Import your own workouts first: the map is downloaded for the area around them.'
+      : 'None of your workouts has a GPS route yet.' }), result, privacy);
+    return panel;
+  }
+
+  const input = h('input', { id: 'map-file', type: 'file', hidden: true });
+  const add = h('button', { class: 'btn', type: 'button', id: 'map-add', onclick: () => input.click() }, 'Add the saved file');
+  const take = async (file) => {
+    clear(result);
+    add.disabled = true;
+    result.append(h('p', { class: 'muted', style: { margin: 0 }, text: `Reading ${file.name}…` }));
+    try {
+      await ctx.actions.addMapFile(file); // redraws this tab with a confirmation
+    } catch (e) {
+      clear(result);
+      result.append(h('div', { class: 'msg err', id: 'map-error' }, h('strong', { text: 'The map was not added' }),
+        e?.code && !/^(not_json|not_osm|server_page|server_error|empty)$/.test(e.code) ? `It could not be saved (${e.code}). Try again.` : e?.message || String(e)));
+      add.disabled = false;
+    }
+  };
+  input.addEventListener('change', () => {
+    if (input.files?.[0]) take(input.files[0]);
+    input.value = '';
+  });
+  panel.addEventListener('dragover', (e) => e.preventDefault());
+  panel.addEventListener('drop', (e) => {
+    e.preventDefault();
+    if (e.dataTransfer?.files?.[0]) take(e.dataTransfer.files[0]);
+  });
+  const link = (d, label, primary) => h('a', {
+    class: `btn${primary ? ' primary' : ''}`, id: 'map-download', href: d.url, target: '_blank', rel: 'noopener',
+    onclick: () => ctx.actions.noteMapRequest(d.areas),
+  }, label);
+  const dl = ctx.actions.mapDownload();
+  if (dl) {
+    const missing = gps.length - covered;
+    panel.append(h('ol', { class: 'steps-list' },
+      h('li', null, link(dl, 'Download map data ↗', true), ' ',
+        h('span', { class: 'muted', text: `About ${fmtInt(dl.km2)} km² around ${areas.length ? `the ${plural(missing, 'route')} outside the map` : 'your routes'}${dl.leftOut ? `, leaving out ${plural(dl.leftOut, 'long route')} that would make it too big` : ''}. It opens OpenStreetMap's data service in a new tab${dl.km2 > 250 ? '. This is a big area, so it can take a few minutes; if it fails, try again later' : '; a large area can take a minute'}.${dl.more ? ` After adding it, download the other ${plural(dl.more, 'area')} the same way.` : ''}` })),
+      h('li', null, "Save what opens as a file: on a computer press Ctrl+S (⌘S on a Mac); on a phone use your browser's Download option."),
+      h('li', null, add, ' ', h('span', { class: 'muted', text: 'Pick the file you saved, or drop it on this card.' }))));
+  } else {
+    const again = ctx.actions.mapDownload({ all: true });
+    panel.append(h('div', { class: 'btn-row' }, add, again ? link(again, 'Download again ↗', false) : null,
+      h('span', { class: 'muted', text: 'All your routes are on the map.' })));
+  }
+  panel.append(input, result);
+  if (areas.length) {
+    const remove = h('button', { class: 'btn', type: 'button', id: 'map-remove' }, 'Remove map');
+    let armed = null;
+    remove.addEventListener('click', async () => {
+      if (!armed) {
+        remove.textContent = 'Select again to remove';
+        armed = setTimeout(() => { armed = null; remove.textContent = 'Remove map'; }, 4000);
+        return;
+      }
+      clearTimeout(armed);
+      remove.disabled = true;
+      try {
+        await ctx.actions.removeMap();
+        toast('Map removed.');
+      } catch {
+        toast('The map could not be removed. Try again.');
+        remove.disabled = false;
+      }
+    });
+    panel.append(h('div', { class: 'btn-row' }, remove));
+  }
+  panel.append(privacy);
+  return panel;
+}
 const plural = (n, word) => `${fmtInt(n)} ${word}${n === 1 ? '' : 's'}`;
 
 function driveChip(d, hs) {
@@ -175,9 +272,10 @@ export function renderData(root, ctx) {
     actResult);
 
   const flash = ctx.takeFlash?.();
-  if (flash) (flash.target === 'files' ? actResult : result).append(h('div', { class: 'msg ok' }, h('strong', { text: flash.title }), flash.text));
+  if (flash && flash.target !== 'map') (flash.target === 'files' ? actResult : result).append(h('div', { class: 'msg ok' }, h('strong', { text: flash.title }), flash.text));
   root.append(section('Import your Huawei export', 'The complete history: workouts with GPS, steps, heart rate, sleep, SpO2 and stress.', importPanel));
   root.append(section('Add individual files', null, filesPanel));
+  root.append(section('Map', 'Streets, paths, parks and water under your routes', mapCard(ctx, flash?.target === 'map' ? flash : null)));
 
   // ---------------------------------------------------------- automatic sources
   const srcCard = (title, state, body) => h('div', { class: 'panel span-6', style: { display: 'flex', flexDirection: 'column', gap: '10px' } },

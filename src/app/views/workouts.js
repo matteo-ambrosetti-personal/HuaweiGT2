@@ -1,6 +1,6 @@
-import { h, chartCard, section, clear, cssVar, mapHint, emptyState, BUCKET_COLOR } from '../ui.js';
+import { h, chartCard, section, clear, mapHint, emptyState, BUCKET_COLOR } from '../ui.js';
 import { scatterTrend, stackedBars, routeThumb, allRoutes } from '../charts.js';
-import { tile, bucketColor, paceOrSpeed, workoutTitle, distanceText, durationText, sourceBadges, emptyElsewhere, oldImportNotice } from './common.js';
+import { tile, bucketColor, paceOrSpeed, workoutTitle, distanceText, durationText, sourceBadges, emptyElsewhere, oldImportNotice, placeOf } from './common.js';
 import { workoutsIn, rollingMedian, weeklyVolume } from '../../lib/stats.js';
 import { fmtInt, fmtDate, fmtClock, fmtPace, fmtSpeed, fmtKm, fmtHoursMinutes, fmtOne } from '../../lib/format.js';
 import { chartBucket, BUCKETS, BUCKET_LABELS } from '../../lib/huawei/sport-types.js';
@@ -55,11 +55,16 @@ export function renderWorkouts(root, ctx) {
   root.append(tiles);
 
   // table (appended after the trends)
+  const hasMap = Boolean(ctx.basemapIndex?.areas?.length);
+  let labels = ctx.basemap?.labels || null;
+  const where = (w) => placeOf(w, labels);
+  const sorts = { ...SORTS, where: (w) => where(w) || '\uffff' };
+  if (!sorts[sortKey] || (sortKey === 'where' && !hasMap)) sortKey = 'date';
   const tableWrap = h('div', { class: 'table-wrap' });
   const more = h('div', { class: 'btn-row' });
   let limit = 25;
   const drawTable = () => {
-    const get = SORTS[sortKey];
+    const get = sorts[sortKey];
     const sorted = list.slice().sort((a, b) => {
       const va = get(a), vb = get(b);
       return (typeof va === 'string' ? va.localeCompare(vb) : va - vb) * sortDir;
@@ -68,6 +73,7 @@ export function renderWorkouts(root, ctx) {
     const cols = [
       { key: 'date', label: 'Date' },
       { key: 'sport', label: 'Workout' },
+      ...(hasMap ? [{ key: 'where', label: 'Where' }] : []),
       { key: 'distance', label: 'Distance', r: true },
       { key: 'duration', label: 'Time', r: true },
       { key: 'pace', label: 'Pace / speed', r: true },
@@ -77,7 +83,7 @@ export function renderWorkouts(root, ctx) {
     ];
     const thead = h('thead', null, h('tr', null, h('th', { scope: 'col' }, h('span', { class: 'sr-only', text: 'Route' })), cols.map((c) => h('th', {
       scope: 'col', class: c.r ? 'r' : null, 'aria-sort': sortKey === c.key ? (sortDir > 0 ? 'ascending' : 'descending') : null,
-    }, h('button', { type: 'button', onclick: () => { if (sortKey === c.key) sortDir = -sortDir; else { sortKey = c.key; sortDir = c.key === 'sport' ? 1 : -1; } drawTable(); } }, c.label))),
+    }, h('button', { type: 'button', onclick: () => { if (sortKey === c.key) sortDir = -sortDir; else { sortKey = c.key; sortDir = c.key === 'sport' || c.key === 'where' ? 1 : -1; } drawTable(); } }, c.label))),
     h('th', { scope: 'col', text: 'Source' })));
     const tbody = h('tbody');
     for (const w of sorted.slice(0, limit)) {
@@ -86,6 +92,7 @@ export function renderWorkouts(root, ctx) {
         h('td', null, routeThumb(w.thumb, bucketColor(w.family))),
         h('td', null, `${fmtDate(w.date, { short: true, weekday: true })} ${w.date.slice(0, 4)}`, h('div', { class: 'muted', style: { fontSize: '12px' }, text: fmtClock(w.start, w.tz) })),
         h('td', null, h('span', { class: 'sport-cell' }, h('span', { class: 'key', style: { background: bucketColor(w.family) } }), workoutTitle(w))),
+        hasMap ? h('td', { class: 'where', text: where(w) || (labels ? '—' : '…') }) : null,
         h('td', { class: 'r', text: distanceText(w) }),
         h('td', { class: 'r', text: durationText(w) }),
         h('td', { class: 'r', text: ps.value === '—' ? '—' : `${ps.value} ${ps.unit}` }),
@@ -103,6 +110,12 @@ export function renderWorkouts(root, ctx) {
     }
   };
   drawTable();
+  if (hasMap && !labels) {
+    ctx.actions.getBasemap().then((map) => {
+      labels = map?.labels || [];
+      if (tableWrap.isConnected) drawTable();
+    });
+  }
   const tableSection = section(`All workouts · ${list.length}`, 'Select a row for the route, splits and heart-rate zones. Column headers sort.', tableWrap, more);
 
   // trends per sport
@@ -233,14 +246,22 @@ const FULL_TRACKS = 60;
  * swaps in the full GPS tracks (newest 60) as they load.
  */
 function routeExplorer(ws, ctx) {
+  let basemap = ctx.basemap || null;
+  const hasMap = Boolean(ctx.basemapIndex?.areas?.length);
+  const whereRow = (w, map) => {
+    const place = placeOf(w, map?.labels);
+    return place ? [{ label: 'Where', value: place }] : [];
+  };
   const routes = ws.map((w) => {
     const ps = paceOrSpeed(w);
     return {
+      w,
       id: w.id,
       points: decodePolyline(w.thumb),
-      color: cssVar(BUCKET_VAR[chartBucket(w.family)]),
+      color: BUCKET_VAR[chartBucket(w.family)], // resolved when drawn, so it follows the theme
       title: `${workoutTitle(w)} · ${fmtDate(w.date, { short: true, weekday: true })} ${w.date.slice(0, 4)}`,
       rows: [
+        ...whereRow(w, basemap),
         { label: 'Distance', value: distanceText(w) },
         { label: 'Time', value: durationText(w) },
         ...(ps.value !== '—' ? [{ label: ps.label, value: `${ps.value} ${ps.unit}` }] : []),
@@ -253,7 +274,7 @@ function routeExplorer(ws, ctx) {
   let fitAll = false, host = null, hostW = 0, map = null;
   const draw = () => {
     clear(host);
-    map = allRoutes(host, hostW, { routes, fitAll, onOpen: (id) => ctx.actions.openWorkout(id) });
+    map = allRoutes(host, hostW, { routes, fitAll, basemap, onOpen: (id) => ctx.actions.openWorkout(id) });
   };
   const toggle = far > 0
     ? h('button', {
@@ -269,7 +290,7 @@ function routeExplorer(ws, ctx) {
   const card = chartCard({
     id: 'all-routes',
     title: 'Where you went',
-    sub: `${routes.length} routes in this period${far > 0 ? `, fitted to where most of them are (${far} elsewhere)` : ''}. ${mapHint(true)}`,
+    sub: `${routes.length} routes in this period${far > 0 ? `, fitted to where most of them are (${far} elsewhere)` : ''}. ${mapHint(true)}${hasMap || ctx.isSample ? '' : ' To see streets and parks under them, add a map in Data → Map.'}`,
     actions: toggle,
     render: (el, width) => { host = el; hostW = width; draw(); },
     legend: BUCKETS.filter((b) => ws.some((w) => chartBucket(w.family) === b)).map((b) => ({ label: BUCKET_LABELS[b], color: BUCKET_COLOR[b], kind: 'line' })),
@@ -279,6 +300,14 @@ function routeExplorer(ws, ctx) {
     routes.find((r) => r.id === id).points = points;
     map?.update(id, points);
   });
+  if (hasMap && !basemap) {
+    ctx.actions.getBasemap().then((m) => {
+      if (!m || !card.isConnected) return;
+      basemap = m;
+      for (const r of routes) r.rows.unshift(...whereRow(r.w, m));
+      map?.setBasemap(m);
+    });
+  }
   return card;
 }
 

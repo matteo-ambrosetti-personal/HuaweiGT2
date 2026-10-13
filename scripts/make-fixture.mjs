@@ -6,6 +6,7 @@ import { writeFileSync, mkdirSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import { ZipWriter, Uint8ArrayWriter, TextReader, configure } from '@zip.js/zip.js';
 import { generateExport } from '../src/lib/sample/generate.js';
+import { syntheticOverpass } from '../src/lib/sample/osm.js';
 
 configure({ useWebWorkers: false });
 
@@ -27,3 +28,8 @@ writeFileSync(out.replace(/\.zip$/, '.plan.json'), JSON.stringify({
   totalSteps: Object.values(plan.days).reduce((s, d) => s + d.steps, 0),
 }, null, 2));
 console.log(`Wrote ${out} (${(data.length / 1e6).toFixed(1)} MB, ${files.length} files, ${plan.workouts.length} workouts)`);
+
+// A synthetic OpenStreetMap download around the same made-up routes, for the map card.
+const mapOut = resolve(dirname(out), 'map-overpass.json');
+writeFileSync(mapOut, JSON.stringify(syntheticOverpass({ spanKm: 8 })));
+console.log(`Wrote ${mapOut}`);

@@ -45,7 +45,7 @@ export class Importer {
       this.pending?.resolve(m);
       this.pending = null;
     } else if (m.type === 'error') {
-      this.pending?.reject(new ImportError('parse', m.message));
+      this.pending?.reject(new ImportError(m.code || 'parse', m.message));
       this.pending = null;
     }
   }
@@ -67,6 +67,13 @@ export class Importer {
     const p = this.expectResult();
     this.worker.postMessage({ type: 'sample', endDate, days: 150 });
     return p;
+  }
+
+  /** Convert a downloaded OpenStreetMap file into map documents ({chunks, cells, bbox, counts}). */
+  mapFile(text, areas) {
+    const p = this.expectResult();
+    this.worker.postMessage({ type: 'basemap', text, areas: areas || [] });
+    return p.then((m) => m.basemap);
   }
 
   /** Parse GPX/TCX/CSV texts as a given source. */

@@ -83,6 +83,11 @@ function dpIndices(points, eps) {
   return out;
 }
 
+/** Douglas–Peucker simplification to `eps` metres; the ends are kept, so rings stay closed. */
+export function simplifyBy(points, eps) {
+  return dpIndices(points, eps).map((i) => points[i]);
+}
+
 /** Simplify to at most `maxPoints` points, returning the kept points. */
 export function simplify(points, maxPoints) {
   if (points.length <= maxPoints) return points.slice();

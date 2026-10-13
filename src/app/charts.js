@@ -6,6 +6,7 @@
 import { s, showTip, hideTip, clear, compact, cssVar } from './ui.js';
 import { decodePolyline, fitProjection, bbox, routeCluster } from '../lib/geo.js';
 import { fmtMinuteOfDay } from '../lib/format.js';
+import { prepareBasemap, drawBasemap, drawLabels } from './map-layer.js';
 
 const MARGIN = { top: 12, right: 12, bottom: 26, left: 40 };
 const parseDay = (k) => new Date(k + 'T00:00:00Z');
@@ -492,14 +493,45 @@ export function dial(el, { value, goal, label, sub, color = 'var(--steps)', ring
 
 const SCALE_STEPS = [10, 20, 25, 50, 100, 200, 250, 500, 1000, 2000, 2500, 5000, 10000, 20000, 50000];
 
+// Canvas maps redraw with fresh colours when the theme changes (main.js sends 'gt2-theme').
+const themed = new Set();
+function redrawOnTheme(canvas, draw) {
+  for (const e of themed) if (!e.canvas.isConnected) themed.delete(e);
+  themed.add({ canvas, draw });
+}
+window.addEventListener('gt2-theme', () => {
+  for (const e of themed) {
+    if (e.canvas.isConnected) e.draw();
+    else themed.delete(e);
+  }
+});
+/** A colour or a CSS custom property name (resolved now, so it follows the theme). */
+const colorOf = (c) => (typeof c === 'string' && c.startsWith('--') ? cssVar(c) : c);
+
 /**
  * Route outline coloured by a per-point metric, with zoom and pan (strokes
- * and markers keep their size; the scale bar follows). points: [{lat, lon, v}]
+ * and markers keep their size; the scale bar follows), over the stored map
+ * when there is one. points: [{lat, lon, v}]. Returns {setBasemap(map)}.
  */
-export function routeMap(el, width, { points, segments, colorScale, height, title }) {
+export function routeMap(el, width, { points, segments, colorScale, height, title, basemap = null }) {
   const hgt = height || Math.round(Math.min(460, width * 0.75));
-  const svg = svgRoot(el, width, hgt, title || 'Route');
-  if (!points.length) return emptyMessage(svg, width, hgt, 'No GPS route for this workout');
+  const wrap = document.createElement('div');
+  wrap.style.position = 'relative';
+  el.append(wrap);
+  const dpr = window.devicePixelRatio || 1;
+  const canvas = document.createElement('canvas');
+  canvas.width = Math.round(width * dpr);
+  canvas.height = Math.round(hgt * dpr);
+  Object.assign(canvas.style, { position: 'absolute', left: '0', top: '0', width: '100%', height: `${hgt}px`, borderRadius: '10px' });
+  canvas.setAttribute('aria-hidden', 'true');
+  wrap.append(canvas);
+  const svg = svgRoot(wrap, width, hgt, title || 'Route');
+  svg.style('position', 'relative').style('display', 'block');
+  if (!points.length) {
+    canvas.remove();
+    emptyMessage(svg, width, hgt, 'No GPS route for this workout');
+    return { setBasemap() {} };
+  }
   const b = bbox(points);
   const proj = fitProjection(b, width, hgt, 24);
   const xy = points.map((p) => proj.project(p.lat, p.lon));
@@ -535,12 +567,34 @@ export function routeMap(el, width, { points, segments, colorScale, height, titl
     bar.append('text').attr('class', 'lbl halo').attr('x', 16).attr('y', hgt - 22).text(nice >= 1000 ? `${nice / 1000} km` : `${nice} m`);
   };
   drawBar(1);
-  mapZoom(svg, width, hgt, (t) => {
-    layer.attr('transform', t);
-    ends.attr('r', 6 / t.k);
-    drawBar(t.k);
+  const ctx = canvas.getContext('2d');
+  let t = d3.zoomIdentity, prep = null;
+  const drawMap = () => {
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    ctx.clearRect(0, 0, width, hgt);
+    if (!prep) return;
+    ctx.setTransform(dpr * t.k, 0, 0, dpr * t.k, dpr * t.x, dpr * t.y);
+    const ppm = proj.pxPerMetre * t.k;
+    drawBasemap(ctx, prep, { k: t.k, ppm });
+    drawLabels(ctx, prep, { t, ppm, width, hgt, dpr });
+  };
+  const zoom = mapZoom(svg, width, hgt, (tr) => {
+    t = tr;
+    layer.attr('transform', tr);
+    ends.attr('r', 6 / tr.k);
+    drawBar(tr.k);
+    drawMap();
   });
   svg.style('cursor', 'grab');
+  const setBasemap = (map) => {
+    prep = map ? prepareBasemap(map, proj.project) : null;
+    canvas.style.background = prep ? 'var(--map-land)' : 'transparent';
+    setMapRoom(zoom, width, hgt, Boolean(prep));
+    drawMap();
+  };
+  if (basemap) setBasemap(basemap);
+  redrawOnTheme(canvas, drawMap);
+  return { setBasemap };
 }
 
 /** Tiny route thumbnail from an encoded polyline. */
@@ -564,18 +618,25 @@ export function routeThumb(poly, color, w = 44, hgt = 30) {
  * left to the page so it still scrolls.
  */
 function mapZoom(target, width, hgt, onZoom) {
-  const zoom = d3.zoom()
+  const zoom = d3.zoom();
+  zoom
     .scaleExtent([1, 40])
     .translateExtent([[0, 0], [width, hgt]])
     .filter((e) => {
       if (e.type === 'touchstart') return e.touches.length > 1;
-      if (e.type === 'wheel') return e.deltaY < 0 || d3.zoomTransform(target.node()).k > 1;
+      if (e.type === 'wheel') return e.deltaY < 0 || d3.zoomTransform(target.node()).k > zoom.scaleExtent()[0] + 1e-6;
       return !e.button && e.type !== 'dblclick';
     })
     .on('zoom', (e) => onZoom(e.transform));
   target.call(zoom).style('touch-action', 'pan-x pan-y');
   target.on('dblclick', () => target.transition().duration(250).call(zoom.transform, d3.zoomIdentity));
   return zoom;
+}
+
+/** With a map underneath there is more to see: zoom out to half and pan around the routes. */
+function setMapRoom(zoom, width, hgt, roomy) {
+  zoom.scaleExtent(roomy ? [0.5, 40] : [1, 40])
+    .translateExtent(roomy ? [[-width, -hgt], [width * 2, hgt * 2]] : [[0, 0], [width, hgt]]);
 }
 
 /** Squared distance from point (px, py) to segment a–b. */
@@ -589,57 +650,71 @@ function segDist2(px, py, ax, ay, bx, by) {
 
 /**
  * All routes overlaid on a canvas, fitted to where most of them are
- * (`fitAll` shows every one). Zoom and pan; hover highlights a route with a
- * tooltip; click or tap opens it. routes: [{id, points: [{lat, lon}], color, title, rows}]
- * Returns {update(id, points)} to swap a simplified outline for the full track.
+ * (`fitAll` shows every one), over the stored map when there is one. Zoom and
+ * pan; hover highlights a route with a tooltip; click or tap opens it.
+ * routes: [{id, points: [{lat, lon}], color, title, rows}]
+ * Returns {update(id, points)} to swap a simplified outline for the full
+ * track, and {setBasemap(map)} for a map that arrives later.
  */
-export function allRoutes(el, width, { routes, height, fitAll = false, onOpen }) {
+export function allRoutes(el, width, { routes, height, fitAll = false, onOpen, basemap = null }) {
   const hgt = height || Math.round(Math.min(520, width * 0.7));
   const canvas = document.createElement('canvas');
   const dpr = window.devicePixelRatio || 1;
   canvas.width = width * dpr;
   canvas.height = hgt * dpr;
-  Object.assign(canvas.style, { width: '100%', height: `${hgt}px`, borderRadius: '10px', background: cssVar('--surface-2'), cursor: 'grab' });
+  Object.assign(canvas.style, { width: '100%', height: `${hgt}px`, borderRadius: '10px', background: 'var(--map-land)', cursor: 'grab' });
   canvas.setAttribute('role', 'img');
   canvas.setAttribute('aria-label', `${routes.length} routes overlaid; scroll or pinch to zoom`);
   el.append(canvas);
   const usable = routes.filter((r) => r.points.length > 1);
-  if (!usable.length) return { update() {} };
+  if (!usable.length) return { update() {}, setBasemap() {} };
   const focus = fitAll ? usable : routeCluster(usable);
   const proj = fitProjection(bbox(focus.flatMap((r) => r.points)), width, hgt, 16);
   const project = (pts) => pts.map((p) => proj.project(p.lat, p.lon));
   const xy = usable.map((r) => project(r.points));
   const ctx = canvas.getContext('2d');
-  const surface = cssVar('--surface');
-  const alpha = Math.max(0.25, Math.min(0.8, 6 / Math.sqrt(usable.length)));
   let t = d3.zoomIdentity;
   let hover = -1;
+  let prep = null;
 
   const trace = (pts) => {
     ctx.beginPath();
     pts.forEach(([x, y], i) => (i ? ctx.lineTo(x, y) : ctx.moveTo(x, y)));
   };
   function draw() {
+    ctx.globalAlpha = 1;
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
     ctx.clearRect(0, 0, width, hgt);
-    ctx.setTransform(dpr * t.k, 0, 0, dpr * t.k, dpr * t.x, dpr * t.y);
+    const zoomed = () => ctx.setTransform(dpr * t.k, 0, 0, dpr * t.k, dpr * t.x, dpr * t.y);
+    zoomed();
+    const ppm = proj.pxPerMetre * t.k;
+    if (prep) drawBasemap(ctx, prep, { k: t.k, ppm });
+    // Over a map the routes need more weight to stand out.
+    const alpha = prep ? Math.max(0.5, Math.min(0.9, 7 / Math.sqrt(usable.length))) : Math.max(0.25, Math.min(0.8, 6 / Math.sqrt(usable.length)));
     ctx.lineJoin = 'round';
     ctx.lineCap = 'round';
+    const colors = new Map();
+    const col = (c) => (colors.has(c) ? colors.get(c) : colors.set(c, colorOf(c)).get(c));
     usable.forEach((r, i) => {
       if (i === hover) return;
       ctx.globalAlpha = hover < 0 ? alpha : alpha * 0.45;
-      ctx.strokeStyle = r.color;
-      ctx.lineWidth = 2 / t.k;
+      ctx.strokeStyle = col(r.color);
+      ctx.lineWidth = (prep ? 2.5 : 2) / t.k;
       trace(xy[i]);
       ctx.stroke();
     });
+    ctx.globalAlpha = 1;
+    if (prep) {
+      drawLabels(ctx, prep, { t, ppm, width, hgt, dpr });
+      zoomed();
+    }
     if (hover >= 0) {
       ctx.globalAlpha = 1;
       trace(xy[hover]);
-      ctx.strokeStyle = surface;
+      ctx.strokeStyle = col('--surface');
       ctx.lineWidth = 7 / t.k;
       ctx.stroke();
-      ctx.strokeStyle = usable[hover].color;
+      ctx.strokeStyle = col(usable[hover].color);
       ctx.lineWidth = 3.5 / t.k;
       ctx.stroke();
     }
@@ -660,7 +735,7 @@ export function allRoutes(el, width, { routes, height, fitAll = false, onOpen })
   }
 
   const sel = d3.select(canvas);
-  mapZoom(sel, width, hgt, (tr) => { t = tr; draw(); });
+  const zoom = mapZoom(sel, width, hgt, (tr) => { t = tr; draw(); });
   let frame = 0;
   canvas.addEventListener('pointermove', (event) => {
     if (event.pointerType === 'touch') return;
@@ -681,7 +756,14 @@ export function allRoutes(el, width, { routes, height, fitAll = false, onOpen })
     const i = nearest(mx, my, event.pointerType === 'touch' ? 20 : 10); // a fingertip is less precise
     if (i >= 0 && onOpen) { hideTip(); onOpen(usable[i].id); }
   });
-  draw();
+  const setBasemap = (map) => {
+    prep = map ? prepareBasemap(map, proj.project) : null;
+    setMapRoom(zoom, width, hgt, Boolean(prep));
+    draw();
+  };
+  if (basemap) setBasemap(basemap);
+  else draw();
+  redrawOnTheme(canvas, draw);
   return {
     update(id, points) {
       const i = usable.findIndex((r) => r.id === id);
@@ -689,6 +771,7 @@ export function allRoutes(el, width, { routes, height, fitAll = false, onOpen })
       xy[i] = project(points);
       draw();
     },
+    setBasemap,
   };
 }
 

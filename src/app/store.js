@@ -2,9 +2,10 @@
 // viewer's private subtree data/users/<uid>/ (invisible to other viewers).
 // MemoryStore is the fallback when db is unavailable (local copy, signed out).
 //
-// Layout: meta · diag · hsync (Drive sync index) · days-YYYY-MM · wk-YYYY-MM ·
-// sleep-YYYY-MM, plus tracks/items/<workoutId>. Only month documents whose
-// content hash changed are written.
+// Layout: meta · diag · hsync (Drive sync index) · basemap (map index) ·
+// days-YYYY-MM · wk-YYYY-MM · sleep-YYYY-MM, plus tracks/items/<workoutId> and
+// basemap/items/<chunkId>. Only month documents whose content hash changed
+// are written.
 
 import { emptyDataset } from '../lib/model.js';
 import { decodePolyline, encodePolyline } from '../lib/geo.js';
@@ -142,6 +143,7 @@ export class CloudStore {
     let meta = defaultMeta();
     let diag = null;
     let syncIndex = null;
+    let basemapIndex = null;
     const parts = [];
     for (const doc of snap.docs) {
       // Snapshots are frozen: copy them, or later merges into loaded days,
@@ -151,14 +153,40 @@ export class CloudStore {
       if (doc.id === 'meta') meta = { ...defaultMeta(), ...data };
       else if (doc.id === 'diag') diag = data;
       else if (doc.id === 'hsync') syncIndex = data;
+      else if (doc.id === 'basemap') basemapIndex = data;
       else parts.push(data);
     }
-    return { ds: docsToDataset(parts), meta, diag, syncIndex };
+    return { ds: docsToDataset(parts), meta, diag, syncIndex, basemapIndex };
   }
 
   async loadTrack(id) {
     const snap = await withRetry(() => this.db.doc(`${this.base}/tracks/items/${safeId(id)}`).get());
     return snap.exists ? mutable(snap.data()) : null;
+  }
+
+  async loadBasemapItem(id) {
+    const snap = await withRetry(() => this.db.doc(`${this.base}/basemap/items/${safeId(id)}`).get());
+    return snap.exists ? mutable(snap.data()) : null;
+  }
+
+  /**
+   * Store a map: its chunks first, then the index that lists them, then
+   * delete the chunks of areas it replaced (`removed` ids).
+   */
+  async saveBasemap(index, items = {}, removed = []) {
+    const errs = await pool(Object.entries(items), 3, async ([id, body]) => {
+      await withRetry(() => this.db.doc(`${this.base}/basemap/items/${safeId(id)}`).set(clean(body)));
+    });
+    if (errs.length) throw errs[0];
+    await withRetry(() => this.db.doc(`${this.base}/basemap`).set(clean(index)));
+    await pool(removed, 3, (id) => withRetry(() => this.db.doc(`${this.base}/basemap/items/${safeId(id)}`).delete()));
+  }
+
+  /** Delete the stored map: the index first (so nothing points at missing chunks), then its chunks. */
+  async removeBasemap(index) {
+    await withRetry(() => this.db.doc(`${this.base}/basemap`).delete());
+    const ids = (index?.areas || []).flatMap((a) => a.items || []);
+    await pool(ids, 3, (id) => withRetry(() => this.db.doc(`${this.base}/basemap/items/${safeId(id)}`).delete()));
   }
 
   async saveMeta(meta) {
@@ -232,12 +260,23 @@ export class CloudStore {
 
   /** Delete every stored document of this viewer. */
   async clear(meta, onProgress = () => {}) {
-    const ids = [...Object.keys(meta.hashes || {}), 'diag', 'hsync', 'meta'];
+    const ids = [...Object.keys(meta.hashes || {}), 'diag', 'hsync', 'basemap', 'meta'];
     const trackIds = Object.keys(meta.tracks || {});
-    const total = ids.length + trackIds.length;
+    let mapIds = [];
+    try {
+      const snap = await this.db.doc(`${this.base}/basemap`).get();
+      if (snap.exists) mapIds = (snap.data()?.areas || []).flatMap((a) => a.items || []);
+    } catch {
+      /* no map */
+    }
+    const total = ids.length + trackIds.length + mapIds.length;
     let done = 0;
     await pool(trackIds, 3, async (id) => {
       await withRetry(() => this.db.doc(`${this.base}/tracks/items/${safeId(id)}`).delete());
+      onProgress({ done: ++done, total });
+    });
+    await pool(mapIds, 3, async (id) => {
+      await withRetry(() => this.db.doc(`${this.base}/basemap/items/${safeId(id)}`).delete());
       onProgress({ done: ++done, total });
     });
     // also sweep anything not listed in meta
@@ -263,19 +302,35 @@ export class MemoryStore {
     this.kind = 'memory';
     this.state = null;
     this.trackStore = {};
+    this.mapStore = {};
   }
 
   async load() {
-    if (!this.state) return { ds: emptyDataset(), meta: defaultMeta(), diag: null, syncIndex: null };
-    return { syncIndex: null, ...structuredClone(this.state) };
+    if (!this.state) return { ds: emptyDataset(), meta: defaultMeta(), diag: null, syncIndex: null, basemapIndex: null };
+    return { syncIndex: null, basemapIndex: null, ...structuredClone(this.state) };
   }
 
   async loadTrack(id) {
     return this.trackStore[id] || null;
   }
 
+  async loadBasemapItem(id) {
+    return this.mapStore[id] || null;
+  }
+
+  async saveBasemap(index, items = {}, removed = []) {
+    Object.assign(this.mapStore, structuredClone(items));
+    for (const id of removed) delete this.mapStore[id];
+    this.state = { ...this.#base(), basemapIndex: structuredClone(index) };
+  }
+
+  async removeBasemap() {
+    this.mapStore = {};
+    this.state = { ...this.#base(), basemapIndex: null };
+  }
+
   #base() {
-    return this.state || { ds: emptyDataset(), meta: defaultMeta(), diag: null, syncIndex: null };
+    return this.state || { ds: emptyDataset(), meta: defaultMeta(), diag: null, syncIndex: null, basemapIndex: null };
   }
 
   async saveMeta(meta) {
@@ -308,5 +363,6 @@ export class MemoryStore {
   async clear() {
     this.state = null;
     this.trackStore = {};
+    this.mapStore = {};
   }
 }

@@ -11,6 +11,7 @@ import assert from 'node:assert/strict';
 
 const ROOT = resolve('.');
 const FIXTURE = resolve('test/fixtures/out/huawei-export-test.zip');
+const MAP_FIXTURE = resolve('test/fixtures/out/map-overpass.json');
 const SHOTS = resolve('screenshots');
 mkdirSync(SHOTS, { recursive: true });
 if (!existsSync(FIXTURE)) throw new Error('Run `npm run fixture` first');
@@ -126,7 +127,8 @@ const routePixels = () => page.$eval('.panel:has(#all-routes) canvas', (c) => {
     if (data[i] > best) { best = data[i]; at = (i - 3) / 4; }
   }
   const r = c.getBoundingClientRect();
-  return { n, hit: [r.left + ((at % c.width) + 0.5) * (r.width / c.width), r.top + (Math.floor(at / c.width) + 0.5) * (r.height / c.height)] };
+  const rel = [((at % c.width) + 0.5) * (r.width / c.width), (Math.floor(at / c.width) + 0.5) * (r.height / c.height)];
+  return { n, rel, hit: [r.left + rel[0], r.top + rel[1]] };
 });
 const drawn = await routePixels();
 assert.ok(drawn.n > 200, `routes drawn (${drawn.n} px)`);
@@ -183,6 +185,68 @@ await page.goBack();
 step('table view toggle');
 await page.click('button:has-text("Table") >> nth=0');
 await page.waitForSelector('.table-wrap table');
+
+step('map: the download link covers the routes, the saved file draws a map under them');
+await page.goto(url + '#data');
+await page.waitForSelector('#map-card');
+assert.match(await page.textContent('#map-status'), /Not added/);
+const mapHref = await page.getAttribute('#map-download', 'href');
+assert.ok(mapHref.startsWith('https://overpass-api.de/api/interpreter?data='), mapHref.slice(0, 80));
+assert.match(decodeURIComponent(mapHref.split('?data=')[1]), /\(45\.\d{3},9\.\d{3},45\.\d{3},9\.\d{3}\)/, 'a box around the routes');
+await page.setInputFiles('#map-file', MAP_FIXTURE);
+await page.waitForSelector('#map-card .msg.ok', { timeout: 30000 });
+assert.match(await page.textContent('#map-status'), /On/);
+assert.match(await page.textContent('#map-summary'), /covers/);
+await page.screenshot({ path: `${SHOTS}/13-map-card.png`, fullPage: true });
+
+await page.goto(url + '#workouts');
+const mapCanvas = await page.waitForSelector('.panel:has(#all-routes) canvas');
+await mapCanvas.scrollIntoViewIfNeeded();
+await page.waitForTimeout(900);
+const withMap = await routePixels();
+assert.ok(withMap.n > drawn.n + 3000, `the map is drawn under the routes (${withMap.n} px vs ${drawn.n} for routes alone)`);
+const box2 = await mapCanvas.boundingBox();
+await page.mouse.move(box2.x + drawn.rel[0], box2.y + drawn.rel[1]);
+await page.waitForFunction(() => /Where/.test(document.getElementById('tip')?.textContent || '') && document.getElementById('tip').style.display === 'block', null, { timeout: 5000 });
+const where = await page.$$eval('td.where', (tds) => tds.map((t) => t.textContent));
+assert.ok(where.some((t) => /Sample/.test(t)), `place names in the table: ${where.slice(0, 4).join(', ')}`);
+await page.mouse.move(box2.x + box2.width / 2, box2.y + box2.height / 2);
+await page.mouse.wheel(0, 600); // zooming out past the routes' frame works over a map
+await page.waitForTimeout(300);
+await mapCanvas.screenshot({ path: `${SHOTS}/14-map-explorer.png` });
+await page.emulateMedia({ colorScheme: 'dark' });
+await page.goto(url + '#workouts');
+const darkCanvas = await page.waitForSelector('.panel:has(#all-routes) canvas');
+await darkCanvas.scrollIntoViewIfNeeded();
+await page.waitForTimeout(900);
+await darkCanvas.screenshot({ path: `${SHOTS}/15-map-explorer-dark.png` });
+await page.emulateMedia({ colorScheme: 'light' });
+
+await page.goto(url + '#workouts');
+await page.waitForSelector('tbody tr.clickable');
+for (const r of await page.$$('tbody tr.clickable')) {
+  if ((await r.$('svg.thumb path')) && /Outdoor run/.test(await r.textContent())) { await r.click(); break; }
+}
+await page.waitForSelector('#route', { timeout: 15000 });
+await page.waitForFunction(() => /near/.test(document.getElementById('workout-place')?.textContent || ''), null, { timeout: 5000 });
+const detailMap = await page.$eval('.panel:has(#route) canvas', (c) => {
+  const { data } = c.getContext('2d').getImageData(0, 0, c.width, c.height);
+  let n = 0;
+  for (let i = 3; i < data.length; i += 4) if (data[i]) n++;
+  return n;
+});
+assert.ok(detailMap > 1000, `the route map has a map underneath (${detailMap} px)`);
+await page.screenshot({ path: `${SHOTS}/16-workout-map.png`, fullPage: true });
+
+step('map: remove asks twice');
+await page.goto(url + '#data');
+await page.click('#map-remove');
+assert.match(await page.textContent('#map-remove'), /again/);
+await page.click('#map-remove');
+await page.waitForFunction(() => /Not added/.test(document.getElementById('map-status')?.textContent || ''), null, { timeout: 10000 });
+await page.goto(url + '#workouts');
+await page.waitForSelector('.panel:has(#all-routes) canvas');
+assert.equal(await page.$('td.where'), null, 'no Where column without a map');
 
 await ctx.close();
 

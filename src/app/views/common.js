@@ -6,6 +6,7 @@ import { fmtPace, fmtSpeed, fmtKm, fmtDuration, fmtDate, fmtClock } from '../../
 import { chartBucket, BUCKET_LABELS } from '../../lib/huawei/sport-types.js';
 import { SOURCE_LABELS } from '../../lib/model.js';
 import { BUCKET_COLOR, FAMILY_COLOR } from '../ui.js';
+import { nearestPlace } from '../../lib/basemap.js';
 
 /**
  * Stat tile: label, value (+unit), delta vs previous period, optional sparkline.
@@ -65,6 +66,12 @@ export function workoutWhen(w) {
 export function sourceBadges(item) {
   const list = item.sources || (item.source ? [item.source] : []);
   return list.map((s) => h('span', { class: 'badge', text: SOURCE_LABELS[s] || s }));
+}
+
+/** Where a workout happened: the place name nearest the middle of its route, from the map; null without one. */
+export function placeOf(w, labels) {
+  if (!labels?.length || !Array.isArray(w?.bbox)) return null;
+  return nearestPlace((w.bbox[0] + w.bbox[2]) / 2, (w.bbox[1] + w.bbox[3]) / 2, labels);
 }
 
 export function distanceText(w) {

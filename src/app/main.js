@@ -22,6 +22,7 @@ import { renderAsk } from './views/ask.js';
 import { renderData, renderDriveCard } from './views/data.js';
 import { rangeText } from './views/common.js';
 import { syncDrive as runDriveSync, DRIVE, driveErrorCopy, protectPruned } from './sync-drive.js';
+import { mapAreas, overpassQuery, overpassUrl, decodeBasemap, areaKm2, MAP_ATTRIBUTION } from '../lib/basemap.js';
 
 const VIEWS = {
   overview: renderOverview,
@@ -227,6 +228,90 @@ const actions = {
     return actions.exportRoutes(ws, format).finally(() => setBusy(null));
   },
 
+  /** The stored map, decoded, or null without one. Loads its chunks once per session. */
+  getBasemap() {
+    if (state.basemap) return Promise.resolve(state.basemap);
+    const areas = state.basemapIndex?.areas || [];
+    if (!areas.length || !state.store) return Promise.resolve(null);
+    basemapLoad ||= Promise.all(areas.flatMap((a) => a.items || []).map((id) => state.store.loadBasemapItem(id).catch(() => null)))
+      .then((chunks) => {
+        const map = decodeBasemap(chunks.filter(Boolean));
+        if (state.basemapIndex?.areas === areas) state.basemap = map;
+        return map;
+      })
+      .finally(() => { basemapLoad = null; });
+    return basemapLoad;
+  },
+
+  /**
+   * The map download for routes the stored map doesn't cover (`all`: every
+   * route): {url, areas, km2}, or null when there is nothing to download.
+   */
+  mapDownload({ all = false } = {}) {
+    const cells = all ? null : (state.basemapIndex?.areas || []).flatMap((a) => a.cells || []);
+    // Routes spanning a huge area (long rides) would make the download too big to finish.
+    const gps = Object.values(state.ds.workouts).filter((w) => Array.isArray(w.bbox));
+    const big = gps.filter((w) => areaKm2(w.bbox) > MAX_ROUTE_KM2);
+    const found = mapAreas(gps.filter((w) => !big.includes(w)), { cells });
+    if (!found.length) return null;
+    // At most three boxes per download, the ones with most routes; the card offers the rest afterwards.
+    const inside = (a) => gps.filter((w) => {
+      const lat = (w.bbox[0] + w.bbox[2]) / 2, lon = (w.bbox[1] + w.bbox[3]) / 2;
+      return lat >= a[0] && lat <= a[2] && lon >= a[1] && lon <= a[3];
+    }).length;
+    const areas = found.map((a) => [a, inside(a)]).sort((x, y) => y[1] - x[1]).slice(0, MAX_MAP_AREAS).map(([a]) => a);
+    return {
+      url: overpassUrl(overpassQuery(areas)), areas, km2: areas.reduce((s, a) => s + areaKm2(a), 0),
+      leftOut: big.length, more: found.length - areas.length,
+    };
+  },
+
+  /** Remember which boxes the user is downloading, so the file's coverage includes them. */
+  noteMapRequest(areas) {
+    state.mapRequest = areas;
+    try {
+      localStorage.setItem('gt2.mapRequest', JSON.stringify(areas));
+    } catch {
+      /* storage unavailable */
+    }
+  },
+
+  /** Add a downloaded OpenStreetMap file as the map for its area; older areas it covers are replaced. */
+  async addMapFile(file) {
+    const text = await file.text();
+    const res = await state.importer.mapFile(text, requestedMapAreas());
+    const id = `m${Date.now().toString(36)}`;
+    const ids = res.chunks.map((_, i) => `${id}-${i}`);
+    const fresh = new Set(res.cells);
+    const old = state.basemapIndex?.areas || [];
+    const replaced = old.filter((a) => (a.cells || []).filter((c) => fresh.has(c)).length >= 0.8 * (a.cells || []).length);
+    const area = {
+      id, at: new Date().toISOString(), cells: res.cells, bbox: res.bbox, items: ids, counts: res.counts,
+      bytes: res.chunks.reduce((n, c) => n + JSON.stringify(c).length, 0),
+    };
+    const index = { kind: 'basemap-index', v: 1, attribution: MAP_ATTRIBUTION, areas: [...old.filter((a) => !replaced.includes(a)), area] };
+    await state.store.saveBasemap(index, Object.fromEntries(ids.map((k, i) => [k, res.chunks[i]])), replaced.flatMap((a) => a.items || []));
+    basemapLoad = null;
+    const c = res.counts;
+    const note = `Read ${c.lines.toLocaleString('en-GB')} streets, paths, rail lines and rivers, ${c.fills.toLocaleString('en-GB')} parks, woods and lakes, and ${c.labels.toLocaleString('en-GB')} names.${replaced.length ? ' It replaces the older map of the same area.' : ''} ${state.store.kind === 'cloud' ? 'Saved to your private storage.' : 'This view cannot save, so the map lasts until you close the page.'}`;
+    update({ basemapIndex: index, basemap: null, mapRequest: null, flash: { title: 'Map added', text: note, target: 'map' } });
+    try {
+      localStorage.removeItem('gt2.mapRequest');
+    } catch {
+      /* ignore */
+    }
+    render();
+    return { counts: c, km2: res.bbox ? areaKm2(res.bbox) : 0, replaced: replaced.length };
+  },
+
+  async removeMap() {
+    const index = state.basemapIndex;
+    if (index) await state.store.removeBasemap(index);
+    basemapLoad = null;
+    update({ basemapIndex: null, basemap: null });
+    render();
+  },
+
   async deleteAll() {
     setBusy('Deleting…', { done: 0, total: 1 });
     try {
@@ -236,12 +321,32 @@ const actions = {
       toast('Some data could not be deleted. Try again.');
     }
     setBusy(null);
-    update({ ds: emptyDataset(), meta: defaultMeta(), tracks: {}, diag: null, syncIndex: null, drive: { ...state.drive, report: null, error: null } });
+    update({ ds: emptyDataset(), meta: defaultMeta(), tracks: {}, diag: null, syncIndex: null, basemapIndex: null, basemap: null, drive: { ...state.drive, report: null, error: null } });
     await loadSample();
     location.hash = 'overview';
     render();
   },
 };
+
+let basemapLoad = null;
+const MAX_ROUTE_KM2 = 150;
+const MAX_MAP_AREAS = 3;
+
+// Canvas maps resolve their colours when they draw: tell them when the theme changes.
+const themeChanged = () => window.dispatchEvent(new Event('gt2-theme'));
+window.matchMedia?.('(prefers-color-scheme: dark)').addEventListener?.('change', themeChanged);
+new MutationObserver(themeChanged).observe(document.documentElement, { attributes: true, attributeFilter: ['data-theme'] });
+
+/** Boxes of the map download in progress (this session, else the last one remembered). */
+function requestedMapAreas() {
+  if (state.mapRequest) return state.mapRequest;
+  try {
+    const saved = JSON.parse(localStorage.getItem('gt2.mapRequest') || 'null');
+    return Array.isArray(saved) ? saved : [];
+  } catch {
+    return [];
+  }
+}
 
 function setBusy(label, p) {
   update({ busy: label ? { label, ...(p || {}) } : null });
@@ -451,6 +556,8 @@ function viewCtx() {
     param: state.param,
     drive: state.drive,
     syncIndex: state.syncIndex,
+    basemap: state.basemap,
+    basemapIndex: state.basemapIndex,
     actions,
     getAskCtx: () => ({ ds: state.ds, settings: settings(), isSample: state.isSample }),
     takeFlash: () => { const f = state.flash; state.flash = null; return f; },
@@ -502,7 +609,7 @@ async function boot() {
     loaded = await store.load();
     toast('Your private storage could not be reached; changes will not be saved in this view.', 6000);
   }
-  update({ meta: loaded.meta, diag: loaded.diag, syncIndex: loaded.syncIndex || null });
+  update({ meta: loaded.meta, diag: loaded.diag, syncIndex: loaded.syncIndex || null, basemapIndex: loaded.basemapIndex || null });
   if (isEmpty(loaded.ds)) await loadSample();
   else update({ ds: loaded.ds, isSample: false });
   update({ loading: false });

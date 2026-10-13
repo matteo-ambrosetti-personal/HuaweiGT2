@@ -8,12 +8,13 @@ import { classifyEntry } from '../lib/huawei/entries.js';
 import { generateExport } from '../lib/sample/generate.js';
 import { parseActivityFile, parseDailyCsv, parseSampleCsv, samplesFragment, sourceFromTitle } from '../lib/healthsync.js';
 import { emptyDataset, mergeDataset } from '../lib/model.js';
+import { osmToBasemap, parseMapText } from '../lib/basemap.js';
 
 let imp = null;
 const open = new Map();
 
 function fail(err) {
-  self.postMessage({ type: 'error', message: String(err?.message || err) });
+  self.postMessage({ type: 'error', message: String(err?.message || err), code: err?.code });
 }
 
 self.onmessage = (e) => {
@@ -127,6 +128,11 @@ self.onmessage = (e) => {
         for (const [date, row] of Object.entries(samplesFragment(samples))) Object.assign((frag.days[date] ||= {}), row);
         mergeDataset(out, frag, m.source);
         self.postMessage({ type: 'done', dataset: out, diag: report });
+        break;
+      }
+      case 'basemap': {
+        // A downloaded OpenStreetMap file (Overpass JSON or GeoJSON) → map documents.
+        self.postMessage({ type: 'done', basemap: osmToBasemap(parseMapText(m.text), { areas: m.areas || [] }) });
         break;
       }
       default:

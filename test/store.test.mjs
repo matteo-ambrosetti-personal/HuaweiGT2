@@ -105,3 +105,44 @@ test('data loaded from storage can be updated (snapshots are frozen)', async () 
   assert.equal(again.meta.tracks['hw-1'], 1);
   assert.deepEqual((await store.loadTrack('hw-1')).d, [0, 1]);
 });
+
+test('the map is stored privately: index, chunks, replacement and deletion', async () => {
+  const db = fakeDb();
+  const store = new CloudStore(db, 'u1');
+  const chunk = (n) => ({ kind: 'basemap', v: 1, lines: { minor: [`poly${n}`] }, fills: {}, labels: [] });
+  const index = { kind: 'basemap-index', v: 1, areas: [{ id: 'a1', cells: ['1000_2000'], items: ['a1-0', 'a1-1'] }] };
+  await store.saveBasemap(index, { 'a1-0': chunk(0), 'a1-1': chunk(1) });
+  assert.ok(db.docs.has('data/users/u1/basemap/items/a1-1'));
+
+  const loaded = await store.load();
+  assert.deepEqual(loaded.basemapIndex, index);
+  assert.equal(Object.keys(loaded.ds.days).length, 0, 'the map index is not read as data');
+  const item = await store.loadBasemapItem('a1-0');
+  item.labels.push(['editable', 0, 0, 'place', 3]); // loads are mutable copies
+  assert.equal(await store.loadBasemapItem('missing'), null);
+
+  // A newer download replaces the area; its old chunks go.
+  const next = { kind: 'basemap-index', v: 1, areas: [{ id: 'a2', cells: ['1000_2000'], items: ['a2-0'] }] };
+  await store.saveBasemap(next, { 'a2-0': chunk(2) }, ['a1-0', 'a1-1']);
+  assert.ok(!db.docs.has('data/users/u1/basemap/items/a1-0'));
+  assert.deepEqual((await store.load()).basemapIndex, next);
+
+  // Deleting everything includes the map.
+  await store.clear(defaultMeta());
+  assert.equal([...db.docs.keys()].filter((k) => k.includes('basemap')).length, 0);
+
+  await store.saveBasemap(next, { 'a2-0': chunk(2) });
+  await store.removeBasemap(next);
+  assert.equal([...db.docs.keys()].length, 0);
+});
+
+test('the memory store keeps a map for the session', async () => {
+  const store = new MemoryStore();
+  const index = { kind: 'basemap-index', v: 1, areas: [{ id: 'a1', cells: [], items: ['a1-0'] }] };
+  await store.saveBasemap(index, { 'a1-0': { kind: 'basemap', lines: {}, fills: {}, labels: [] } });
+  await store.save(emptyDataset(), defaultMeta());
+  assert.deepEqual((await store.load()).basemapIndex, index, 'a later save keeps it');
+  assert.equal((await store.loadBasemapItem('a1-0')).kind, 'basemap');
+  await store.removeBasemap(index);
+  assert.equal((await store.load()).basemapIndex, null);
+});

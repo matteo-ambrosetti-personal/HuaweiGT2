@@ -2,7 +2,7 @@
 
 A personal dashboard for a **Huawei Watch GT 2**, published as a private claude.ai Artifact. It covers:
 - **Activity:** steps, distance and calories.
-- **Workouts:** GPS routes on a map you can zoom and hover, km splits, best efforts, heart-rate zones, weekly distance, and the watch's training rating (training effect, load, recovery time, ground contact).
+- **Workouts:** GPS routes on a map you can zoom and hover (with an OpenStreetMap background of streets, paths, parks and water once you add it), km splits, best efforts, heart-rate zones, weekly distance, and the watch's training rating (training effect, load, recovery time, ground contact).
 - **Sleep:** sleep stages.
 - **Health:** heart rate, SpO2, stress and HRV.
 - **Statistics:** records, streaks, year-by-year totals, and running fitness (the watch's race predictions and lactate threshold).
@@ -24,7 +24,8 @@ Huawei offers no free API for personal use, so data gets in three ways:
   - Parsed data is stored in the artifact's private per-user storage, under `data/users/<you>/`.
   - Other people who can open the artifact cannot read it.
   - Claude can read it when you ask, in a conversation or through the page's Ask Claude panel.
-- **No other services:** nothing is sent to any other service. Exports are offered through the platform's download prompt.
+- **No other services:** the page sends nothing to any other service. Exports are offered through the platform's download prompt.
+- **Map background:** claude.ai pages can't load map tiles, so the page draws its own map from OpenStreetMap data. You download that data once in your browser, through a link the page builds for the area around your routes. OpenStreetMap's server sees that area, never your tracks. The map is kept in your private storage. Map data © OpenStreetMap contributors (ODbL). Details: [docs/map-data.md](docs/map-data.md).
 - **Google Drive:** the page may only call the connector's read tools `search_files` and `download_file_content`, as you, after you allow it once. It reads only files in folders named "Health Sync …".
 
 ## Using it
@@ -34,6 +35,7 @@ Huawei offers no free API for personal use, so data gets in three ways:
 3. Optional automatic updates:
    - Health Sync: [docs/setup-health-sync.md](docs/setup-health-sync.md).
    - intervals.icu: [docs/setup-intervals-bridge.md](docs/setup-intervals-bridge.md).
+4. Optional map background: **Data → Map → Download map data**, save what opens, then **Add the saved file** ([docs/map-data.md](docs/map-data.md)).
 
 Before the first import the page shows clearly labelled **sample data** generated in the browser.
 
@@ -42,7 +44,7 @@ Before the first import the page shows clearly labelled **sample data** generate
 ```sh
 npm install
 npm test            # unit tests (parsers, merge rules, statistics, GPX/TCX, Drive sync against a fake connector)
-npm run fixture     # synthetic AES-encrypted export → test/fixtures/out/ (password test1234)
+npm run fixture     # synthetic AES-encrypted export and OpenStreetMap download → test/fixtures/out/ (password test1234)
 npm run build       # → dist/gt2-logbook.html (the published artifact)
 npm run test:e2e    # Chromium: imports the fixture, visits every tab, syncs from a fake Drive, saves screenshots/
 npm run lint
@@ -55,6 +57,7 @@ npm run lint
 | `src/lib/model.js` | The normalised dataset and source precedence (export > intervals.icu > Health Sync; for steps and heart rate the more complete day wins) |
 | `src/app/` | The page: storage on the artifact `db`, importer, views, d3 charts, Ask Claude, exports |
 | `src/app/sync-drive.js` | Health Sync → Google Drive sync (file index, change detection, per-minute merge) |
+| `src/lib/basemap.js`, `src/app/map-layer.js` | The OpenStreetMap background: download link, file conversion, drawing ([docs/map-data.md](docs/map-data.md)) |
 | `bridge/` | The GT2 Bridge Cloudflare Worker (an OAuth-protected MCP connector for intervals.icu) |
 
 d3 7.9.0 and zip.js 2.8.61 load from pinned CDN URLs at runtime. Everything else is inlined by `scripts/build.mjs`.

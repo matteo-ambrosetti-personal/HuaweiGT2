@@ -40,6 +40,21 @@
   --warning: #fab219;
   --critical: #d03b3b;
 
+  /* map background (OpenStreetMap data): quiet neutrals so routes stand out */
+  --map-land: #eef1f3;
+  --map-water: #b9d3e6;
+  --map-water-label: #3a6b8f;
+  --map-park: #d9e8d1;
+  --map-wood: #c9dcc0;
+  --map-pitch: #e1ebd8;
+  --map-road: #ffffff;
+  --map-road-major: #fffaf0;
+  --map-casing: #cfd6db;
+  --map-path: #9aa5ad;
+  --map-rail: #a4adb4;
+  --map-label: #46555f;
+  --map-halo: rgba(246, 248, 249, 0.92);
+
   --font-display: "Archivo", "Arial Narrow", system-ui, sans-serif;
   --font-ui: "IBM Plex Sans", system-ui, -apple-system, "Segoe UI", sans-serif;
   --radius: 10px;
@@ -82,6 +97,19 @@
     --heat-3: #44a54a;
     --heat-4: #86d98a;
     --good-text: #3fbf3f;
+    --map-land: #182027;
+    --map-water: #1f3b52;
+    --map-water-label: #84b5da;
+    --map-park: #1d2f25;
+    --map-wood: #1f3427;
+    --map-pitch: #233229;
+    --map-road: #2f3a44;
+    --map-road-major: #3b4752;
+    --map-casing: #10161b;
+    --map-path: #5e6c76;
+    --map-rail: #58656e;
+    --map-label: #b3c0c8;
+    --map-halo: rgba(15, 20, 24, 0.9);
     color-scheme: dark;
   }
 }
@@ -118,6 +146,19 @@
   --heat-3: #44a54a;
   --heat-4: #86d98a;
   --good-text: #3fbf3f;
+  --map-land: #182027;
+  --map-water: #1f3b52;
+  --map-water-label: #84b5da;
+  --map-park: #1d2f25;
+  --map-wood: #1f3427;
+  --map-pitch: #233229;
+  --map-road: #2f3a44;
+  --map-road-major: #3b4752;
+  --map-casing: #10161b;
+  --map-path: #5e6c76;
+  --map-rail: #58656e;
+  --map-label: #b3c0c8;
+  --map-halo: rgba(15, 20, 24, 0.9);
   color-scheme: dark;
 }
 

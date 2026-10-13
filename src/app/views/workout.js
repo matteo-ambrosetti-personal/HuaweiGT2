@@ -1,7 +1,7 @@
 /* global d3 */
 import { h, chartCard, section, clear, cssVar, mapHint, emptyState } from '../ui.js';
 import { routeMap, lineChart, hBars } from '../charts.js';
-import { bucketColor, paceOrSpeed, workoutTitle, workoutWhen, sourceBadges } from './common.js';
+import { bucketColor, paceOrSpeed, workoutTitle, workoutWhen, sourceBadges, placeOf } from './common.js';
 import { trackPoints } from '../../lib/gpx.js';
 import { estimateMaxHr, zonesFromHist, zoneBounds, ZONES } from '../../lib/stats.js';
 import { fmtPace, fmtDuration, fmtInt, fmtOne, fmtKm } from '../../lib/format.js';
@@ -55,11 +55,28 @@ export function renderWorkout(root, ctx) {
   const ps = paceOrSpeed(w);
   const stat = (k, v, unit) => h('div', { class: 'stat' }, h('span', { class: 'k', text: k }), h('span', { class: 'v' }, v ?? '—', unit ? h('small', { text: unit }) : null));
   const center = w.bbox ? [(w.bbox[0] + w.bbox[2]) / 2, (w.bbox[1] + w.bbox[3]) / 2] : null;
+  // The stored map, if any: drawn under the route, and it names the place.
+  let basemap = ctx.basemap || null;
+  let mapHandle = null;
+  const placeEl = h('span', { id: 'workout-place' });
+  const showPlace = (map) => {
+    const place = placeOf(w, map?.labels);
+    placeEl.textContent = place ? ` · near ${place}` : '';
+  };
+  showPlace(basemap);
+  if (ctx.basemapIndex?.areas?.length && !basemap) {
+    ctx.actions.getBasemap().then((map) => {
+      if (!map || !placeEl.isConnected) return;
+      basemap = map;
+      showPlace(map);
+      mapHandle?.setBasemap(map);
+    });
+  }
   root.append(h('div', { class: 'detail-head' },
     h('div', null,
       h('a', { href: '#workouts', class: 'muted', style: { fontSize: '13px' } }, '← All workouts'),
       h('h2', { style: { marginTop: '6px' } }, h('span', { style: { display: 'inline-block', width: '12px', height: '12px', borderRadius: '3px', background: bucketColor(w.family), marginRight: '10px' } }), workoutTitle(w)),
-      h('div', { class: 'muted', style: { marginTop: '2px' } }, workoutWhen(w), ' · ', ...sourceBadges(w))),
+      h('div', { class: 'muted', style: { marginTop: '2px' } }, workoutWhen(w), placeEl, ' · ', ...sourceBadges(w))),
     h('div', { class: 'btn-row' },
       w.hasTrack ? h('button', { class: 'btn', type: 'button', onclick: () => ctx.actions.exportRoutes([w], 'gpx') }, 'Download GPX') : null,
       w.hasTrack ? h('button', { class: 'btn', type: 'button', onclick: () => ctx.actions.exportRoutes([w], 'tcx') }, 'Download TCX') : null,
@@ -156,7 +173,7 @@ export function renderWorkout(root, ctx) {
           actions: h('div', { class: 'seg' },
             ...[foot ? ['pace', 'Pace'] : ['speed', 'Speed'], ['hr', 'Heart rate']].filter(([k]) => k !== 'hr' || pts.some((p) => p.hr)).map(([k, l]) =>
               h('button', { type: 'button', 'aria-pressed': String(metric === k), onclick: () => { metric = k; renderMap(); } }, l))),
-          render: (el, width) => routeMap(el, width, { points: gpsPts, colorScale: scale, title: 'Route' }),
+          render: (el, width) => { mapHandle = routeMap(el, width, { points: gpsPts, colorScale: scale, title: 'Route', basemap }); },
           legend: vals.length ? [
             { label: `${fmt(dom[0])}`, color: light },
             { label: `${fmt(dom[1])}`, color: dark },
