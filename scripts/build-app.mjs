@@ -70,4 +70,6 @@ ${body}
 </html>
 `;
 writeFileSync(`${OUT}/index.html`, html);
+// Shown by Health Connect's "privacy policy" link (the plugin opens public/privacypolicy.html).
+copyFileSync('src/privacypolicy.html', `${OUT}/privacypolicy.html`);
 console.log(`www/index.html + app.js ${(app.outputFiles[0].text.length / 1024).toFixed(0)} KB (worker ${(workerCode.length / 1024).toFixed(0)} KB)`);
