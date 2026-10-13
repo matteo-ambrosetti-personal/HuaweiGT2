@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Shown while the app starts on Android 8–11 (12+ uses the system splash). -->
+<layer-list xmlns:android="http://schemas.android.com/apk/res/android">
+    <item android:drawable="@color/gt2_bg"/>
+    <item android:drawable="@drawable/ic_splash" android:gravity="center" android:width="144dp" android:height="144dp"/>
+</layer-list>

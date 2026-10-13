@@ -1,8 +1,9 @@
 import { h, chartCard, section } from '../ui.js';
-import { dailyBars, columns } from '../charts.js';
+import { dailyBars, columns, stackedBars } from '../charts.js';
+import { STEP_BANDS, monthlyStepBands, restActivity } from '../../lib/models/rhythm.js';
 import { tile } from './common.js';
 import { daySeries, rollingMean, weekdayProfile, hourProfile, streaks, stepBests, summarize, change, comparable } from '../../lib/stats.js';
-import { fmtInt, fmtDate, fmtOne, weekdayName } from '../../lib/format.js';
+import { fmtInt, fmtDate, fmtOne, weekdayName, monthName } from '../../lib/format.js';
 
 export function renderActivity(root, ctx) {
   const { ds, range, prev, settings } = ctx;
@@ -96,4 +97,47 @@ export function renderActivity(root, ctx) {
   hourCard.classList.add('span-6');
   grid.append(wdCard, hourCard);
   root.append(section('Patterns', null, grid));
+  root.append(...activityModels(rows));
+}
+
+/** Step-count bands (Tudor-Locke) per month and the rest–activity rhythm (Van Someren). */
+function activityModels(rows) {
+  const out = [];
+  const grid = h('div', { class: 'grid' });
+  const months = monthlyStepBands(rows);
+  if (months.length) {
+    const colors = STEP_BANDS.map((_, i) => `var(--heat-${i})`);
+    const keys = STEP_BANDS.map((b, i) => ({ key: b.key, label: `${b.label} (${b.hi === Infinity ? `${fmtInt(b.lo)}+` : `${fmtInt(b.lo)}–${fmtInt(b.hi - 1)}`})`, color: colors[i] }));
+    const share = months.map((m) => ({ ...m, key: m.month, label: monthName(Number(m.month.slice(5)) - 1), ...Object.fromEntries(STEP_BANDS.map((b) => [b.key, m[b.key] / m.n])) }));
+    const days = months.reduce((t, m) => t + m.n, 0);
+    const over = months.reduce((t, m) => t + m.somewhat + m.active + m.high, 0);
+    const c = chartCard({
+      id: 'step-bands',
+      title: 'Days by activity level',
+      sub: `Tudor-Locke & Bassett's step bands, as a share of each month's days. ${Math.round((over / days) * 100)} % of your days in this period reached 7,500 steps or more. A meta-analysis found mortality risk falling with steps up to about 6,000–8,000 a day at 60+ and 8,000–10,000 below 60 (Paluch et al. 2022).`,
+      render: (el, w) => stackedBars(el, w, {
+        rows: share, keys, yMax: 1, yFormat: (v) => `${Math.round(v * 100)}%`, tipValue: (v) => `${Math.round(v * 100)} %`,
+        tipTitle: (r) => `${r.label} ${r.month.slice(0, 4)} · ${r.n} days`, title: 'Days by activity level',
+      }),
+      legend: keys.map((k) => ({ label: k.label, color: k.color })),
+      table: () => ({ columns: [{ label: 'Month', get: (r) => r.month }, ...STEP_BANDS.map((b) => ({ label: b.label, get: (r) => r[b.key], r: true })), { label: 'Days', get: (r) => r.n, r: true }], rows: months.slice().reverse() }),
+    });
+    c.classList.add('span-7');
+    grid.append(c);
+  }
+  const ra = restActivity(rows);
+  if (ra) {
+    const hour = (h0) => `${String(h0).padStart(2, '0')}:00`;
+    const panel = h('div', { class: 'panel span-5', id: 'rest-activity' },
+      h('h3', { class: 'chart-title', text: 'Rest–activity rhythm' }),
+      h('p', { class: 'chart-sub', text: `Non-parametric rhythm analysis of your hourly steps over ${ra.days} days (Witting et al. 1990; Van Someren et al. 1999).` }),
+      h('div', { class: 'tiles' },
+        tile({ label: 'Interdaily stability', value: ra.is.toFixed(2), unit: '/ 1', color: 'var(--steps)', note: 'Same pattern every day = 1' }),
+        tile({ label: 'Intradaily variability', value: ra.iv.toFixed(2), unit: '/ 2', color: 'var(--steps)', note: 'Higher = more broken up' }),
+        tile({ label: 'Most active 10 h', value: hour(ra.m10Start), color: 'var(--steps)', note: `${fmtInt(ra.m10)} steps an hour` }),
+        tile({ label: 'Quietest 5 h', value: hour(ra.l5Start), color: 'var(--steps)', note: ra.ra != null ? `Relative amplitude ${ra.ra.toFixed(2)}` : null })));
+    grid.append(panel);
+  }
+  if (grid.children.length) out.push(section('Activity models', null, grid));
+  return out;
 }

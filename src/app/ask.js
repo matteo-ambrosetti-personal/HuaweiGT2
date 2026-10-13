@@ -234,4 +234,7 @@ export const ERROR_COPY = {
   prompt_too_large: 'That needed too much data at once. Ask about a shorter period.',
   upstream_error: 'The answer was interrupted. Ask again.',
   tools_unavailable: 'Claude cannot read your data in this view; it answered from a summary.',
+  bad_key: 'The Anthropic API key was not accepted. Check it in the Claude Console, or paste a new one.',
+  offline: 'Could not reach api.anthropic.com. Check your connection and ask again.',
+  bad_request: 'The request was rejected. Try a different question, or a different model.',
 };

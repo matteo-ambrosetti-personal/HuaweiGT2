@@ -1,6 +1,7 @@
-// Persistence. CloudStore keeps everything in the artifact's db under the
-// viewer's private subtree data/users/<uid>/ (invisible to other viewers).
-// MemoryStore is the fallback when db is unavailable (local copy, signed out).
+// Persistence. CloudStore keeps everything in a document db under
+// data/users/<uid>/: the artifact's db (the viewer's private subtree,
+// invisible to other viewers), or the app's on-device storage (local-docs.js).
+// MemoryStore is the fallback when neither is available (local copy, signed out).
 //
 // Layout: meta · diag · hsync (Drive sync index) · basemap (map index) ·
 // days-YYYY-MM · wk-YYYY-MM · sleep-YYYY-MM, plus tracks/items/<workoutId> and
@@ -132,10 +133,13 @@ export function fitTrack(track) {
 }
 
 export class CloudStore {
-  constructor(db, uid) {
+  /** kind 'cloud' (claude.ai storage) or 'device' (this phone or browser). */
+  constructor(db, uid, { kind = 'cloud' } = {}) {
     this.db = db;
     this.base = `data/users/${uid}`;
-    this.kind = 'cloud';
+    this.kind = kind;
+    this.persistent = true;
+    this.where = kind === 'device' ? 'this device' : 'your private storage';
   }
 
   async load() {
@@ -300,6 +304,8 @@ export class CloudStore {
 export class MemoryStore {
   constructor() {
     this.kind = 'memory';
+    this.persistent = false;
+    this.where = null;
     this.state = null;
     this.trackStore = {};
     this.mapStore = {};

@@ -22,6 +22,9 @@ export const state = {
   // Google Drive (Health Sync) sync: status checking|unavailable|prompt|ready|denied|missing|reauth|…,
   // busy while running, progress {phase, done, total}, error {status, title, text, action?}, report.
   drive: { status: 'checking', busy: false, progress: null, error: null, report: null },
+  // App sources: Health Connect (status checking|unavailable|prompt|ready) and intervals.icu.
+  health: { status: 'checking', busy: false, progress: null, error: null, report: null, history: false },
+  intervals: { busy: false, progress: null, error: null, report: null },
   syncIndex: null, // the stored Drive sync index (doc "hsync")
   basemapIndex: null, // the stored map's index (doc "basemap")
   basemap: null, // the stored map, decoded on first use

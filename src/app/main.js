@@ -2,15 +2,17 @@
 
 import { state, update, settings, saveFilter } from './state.js';
 import { getRuntime } from './runtime.js';
+import { platform } from './platform.js';
 import { CloudStore, MemoryStore, defaultMeta } from './store.js';
 import { Importer } from './importer.js';
 import { h, clear, toast } from './ui.js';
 import { emptyDataset, mergeDataset, isEmpty, datasetRange, SOURCE_LABELS, workoutList } from '../lib/model.js';
 import { resolveRange, previousRange, PRESETS, workoutsIn } from '../lib/stats.js';
-import { todayKey, fmtDate, daysBetween } from '../lib/format.js';
+import { todayKey, fmtDate, daysBetween, addDays } from '../lib/format.js';
 import { BUCKETS, BUCKET_LABELS, chartBucket } from '../lib/huawei/sport-types.js';
 import { BUCKET_COLOR } from './ui.js';
 import * as exporter from './exporter.js';
+import { parseBackup } from '../lib/backup.js';
 import { renderOverview } from './views/overview.js';
 import { renderActivity } from './views/activity.js';
 import { renderWorkouts } from './views/workouts.js';
@@ -19,13 +21,19 @@ import { renderSleep } from './views/sleep.js';
 import { renderHeart } from './views/heart.js';
 import { renderRecords } from './views/records.js';
 import { renderAsk } from './views/ask.js';
-import { renderData, renderDriveCard } from './views/data.js';
+import { renderInsights } from './views/insights.js';
+import { renderTraining } from './views/training.js';
+import { renderData, renderDriveCard, renderHealthCard, renderIntervalsCard } from './views/data.js';
 import { rangeText } from './views/common.js';
 import { syncDrive as runDriveSync, DRIVE, driveErrorCopy, protectPruned } from './sync-drive.js';
 import { mapAreas, overpassQuery, overpassUrl, decodeBasemap, areaKm2, MAP_ATTRIBUTION } from '../lib/basemap.js';
+import { healthStatus, connectHealth, syncHealthConnect, healthSince } from '../lib/healthconnect.js';
+import { syncIntervals } from '../lib/intervals-api.js';
 
 const VIEWS = {
   overview: renderOverview,
+  insights: renderInsights,
+  training: renderTraining,
   activity: renderActivity,
   workouts: renderWorkouts,
   workout: renderWorkout,
@@ -35,7 +43,7 @@ const VIEWS = {
   ask: renderAsk,
   data: renderData,
 };
-const FILTERED = new Set(['overview', 'activity', 'workouts', 'sleep', 'heart']);
+const FILTERED = new Set(['overview', 'training', 'activity', 'workouts', 'sleep', 'heart']);
 const $ = (id) => document.getElementById(id);
 
 // ------------------------------------------------------------------ routing
@@ -99,7 +107,7 @@ const actions = {
     const trackCache = state.isSample ? {} : state.tracks;
     Object.assign(trackCache, tracks);
     const c = res.diag.counts;
-    const summary = `Read ${c.workouts} workouts, ${c.days} days and ${c.nights} nights${range?.from ? ` from ${fmtDate(range.from)} to ${fmtDate(range.to)}` : ''}.${res.diag.parseErrors ? ` ${res.diag.parseErrors} unreadable records were skipped.` : ''} ${state.store.kind === 'cloud' ? 'Saving to your private storage in the background.' : 'This view cannot save, so the data lasts until you close the page.'}`;
+    const summary = `Read ${c.workouts} workouts, ${c.days} days and ${c.nights} nights${range?.from ? ` from ${fmtDate(range.from)} to ${fmtDate(range.to)}` : ''}.${res.diag.parseErrors ? ` ${res.diag.parseErrors} unreadable records were skipped.` : ''} ${state.store.persistent ? `Saving to ${state.store.where} in the background.` : 'This view cannot save, so the data lasts until you close the page.'}`;
     update({ ds: base, meta, isSample: false, tracks: trackCache, diag: { ...res.diag, at: new Date().toISOString() }, flash: { title: 'Import complete', text: summary } });
     render();
     persist(tracks, res.diag);
@@ -216,8 +224,41 @@ const actions = {
     if (kind === 'workouts') return exporter.exportWorkoutsCsv(dl, workoutList(state.ds));
     return exporter.exportDailyCsv(dl, state.ds);
   },
-  exportBackup() {
-    return exporter.exportBackup(state.runtime?.downloads, state.ds, state.isSample ? {} : state.tracks);
+  /** Every day, night, workout and route (routes not yet loaded this session are read first), plus settings. */
+  async exportBackup() {
+    const tracks = {};
+    if (!state.isSample) {
+      const ids = Object.values(state.ds.workouts).filter((w) => w.hasTrack).map((w) => w.id);
+      let done = 0;
+      for (const id of ids) {
+        const t = await actions.loadTrack(id).catch(() => null);
+        if (t) tracks[id] = t;
+        if (++done % 10 === 0) setBusy('Preparing backup', { done, total: ids.length });
+      }
+      setBusy(null);
+    }
+    return exporter.exportBackup(state.runtime?.downloads, state.ds, tracks, state.meta);
+  },
+
+  /** Replace everything stored here with a backup file. */
+  async restoreBackup(file) {
+    const b = parseBackup(await file.text());
+    setBusy('Restoring', { done: 0, total: 1 });
+    try {
+      if (!state.isSample) await state.store.clear(state.meta, (p) => setBusy('Restoring', p)).catch(() => {});
+    } finally {
+      setBusy(null);
+    }
+    const meta = { ...defaultMeta(), settings: { ...(b.settings || {}) }, sources: b.sources || {} };
+    meta.imports = [{ at: new Date().toISOString(), source: 'backup', counts: { workouts: Object.keys(b.ds.workouts).length, days: Object.keys(b.ds.days).length, nights: Object.keys(b.ds.nights).length }, range: datasetRange(b.ds) }];
+    const c = meta.imports[0].counts;
+    update({
+      ds: b.ds, meta, isSample: false, tracks: { ...b.tracks }, diag: null, syncIndex: null, basemapIndex: null, basemap: null,
+      flash: { title: 'Backup restored', text: `Restored ${c.workouts} workouts, ${c.days} days and ${c.nights} nights${b.exportedAt ? ` saved on ${fmtDate(b.exportedAt.slice(0, 10))}` : ''}. ${state.store.persistent ? `Saving to ${state.store.where}.` : ''}` },
+    });
+    render();
+    await persist(b.tracks, null);
+    return c;
   },
   exportRoutes(workouts, format) {
     return exporter.exportRoutes(state.runtime?.downloads, workouts, format, (id) => actions.loadTrack(id), (p) => setBusy(`Preparing ${p.done}/${p.total}`, p));
@@ -293,7 +334,7 @@ const actions = {
     await state.store.saveBasemap(index, Object.fromEntries(ids.map((k, i) => [k, res.chunks[i]])), replaced.flatMap((a) => a.items || []));
     basemapLoad = null;
     const c = res.counts;
-    const note = `Read ${c.lines.toLocaleString('en-GB')} streets, paths, rail lines and rivers, ${c.fills.toLocaleString('en-GB')} parks, woods and lakes, and ${c.labels.toLocaleString('en-GB')} names.${replaced.length ? ' It replaces the older map of the same area.' : ''} ${state.store.kind === 'cloud' ? 'Saved to your private storage.' : 'This view cannot save, so the map lasts until you close the page.'}`;
+    const note = `Read ${c.lines.toLocaleString('en-GB')} streets, paths, rail lines and rivers, ${c.fills.toLocaleString('en-GB')} parks, woods and lakes, and ${c.labels.toLocaleString('en-GB')} names.${replaced.length ? ' It replaces the older map of the same area.' : ''} ${state.store.persistent ? `Saved to ${state.store.where}.` : 'This view cannot save, so the map lasts until you close the page.'}`;
     update({ basemapIndex: index, basemap: null, mapRequest: null, flash: { title: 'Map added', text: note, target: 'map' } });
     try {
       localStorage.removeItem('gt2.mapRequest');
@@ -412,8 +453,179 @@ async function checkDrive({ auto = false } = {}) {
 }
 
 document.addEventListener('visibilitychange', () => {
-  if (document.visibilityState === 'visible' && !state.loading && state.runtime) checkDrive({ auto: true });
+  if (document.visibilityState !== 'visible' || state.loading || !state.runtime) return;
+  if (platform.app) autoSyncApp();
+  else checkDrive({ auto: true });
 });
+window.addEventListener('gt2-resume', () => {
+  if (!state.loading && state.runtime) autoSyncApp();
+});
+
+// ------------------------------------------------------------------ app sources (Health Connect, intervals.icu)
+
+const APP_SYNC_MS = 60 * 60000;
+const appRuns = {};
+
+function setSource(name, patch) {
+  update({ [name]: { ...state[name], ...patch } });
+  renderChips();
+  const card = document.getElementById(`${name}-card`);
+  if (card) (name === 'health' ? renderHealthCard : renderIntervalsCard)(card, viewCtx());
+}
+
+/** Coverage of a source after a sync: when, the dates it has delivered so far, what this run did. */
+function sourceInfo(prev, frag, at, last) {
+  const range = datasetRange(frag);
+  const from = [prev?.range?.from, range?.from].filter(Boolean).sort()[0];
+  const to = [prev?.range?.to, range?.to].filter(Boolean).sort().at(-1);
+  return { ...prev, at, ...(from ? { range: { from, to } } : {}), last };
+}
+
+/** Merge a synced fragment, record the source, save. Resolves {changed, saved}. */
+async function applyFragment(frag, source, info) {
+  const changed = Object.keys(frag.days).length + Object.keys(frag.nights).length + Object.keys(frag.workouts).length > 0;
+  if (!changed) {
+    if (!state.isSample) {
+      state.meta.sources = { ...(state.meta.sources || {}), [source]: info };
+      await state.store.saveMeta(state.meta).catch(() => {});
+    }
+    return { changed: false, saved: { error: null } };
+  }
+  const base = state.isSample ? emptyDataset() : state.ds;
+  const tracks = frag.tracks || {};
+  mergeDataset(base, frag, source);
+  base.tracks = {};
+  const meta = state.isSample ? { ...defaultMeta(), settings: state.meta.settings || {} } : state.meta;
+  meta.sources = { ...(meta.sources || {}), [source]: info };
+  const cache = state.isSample ? {} : state.tracks;
+  Object.assign(cache, tracks);
+  update({ ds: base, meta, isSample: false, tracks: cache });
+  render();
+  return { changed: true, saved: await persist(tracks, null, { quiet: true }) };
+}
+
+/** One run per source at a time. */
+function once(name, fn) {
+  appRuns[name] ||= fn().finally(() => { appRuns[name] = null; });
+  return appRuns[name];
+}
+
+const due = (src) => {
+  const last = Date.parse(state.meta.sources?.[src]?.at || '');
+  return !Number.isFinite(last) || Date.now() - last > APP_SYNC_MS;
+};
+
+async function checkHealth() {
+  const st = await healthStatus(state.runtime?.health);
+  if (!st.available) return setSource('health', { status: 'unavailable', reason: st.reason });
+  const granted = st.granted.length > 0;
+  setSource('health', { status: granted ? 'ready' : 'prompt', history: st.history, granted: st.granted });
+  return st;
+}
+
+/** Sync what is due, quietly: Health Connect when allowed, intervals.icu when a key is saved. */
+async function autoSyncApp() {
+  const st = state.health.status === 'checking' || state.health.status === 'ready' ? await checkHealth() : null;
+  if (st?.available && st.granted.length && due('healthconnect')) actions.syncHealth({ auto: true });
+  if (state.runtime?.secrets?.get('intervals') && due('intervals')) actions.syncIntervals({ auto: true });
+}
+
+Object.assign(actions, {
+  /** Ask Health Connect for read access, then sync. */
+  async connectHealth() {
+    const health = state.runtime?.health;
+    if (!health) return;
+    try {
+      const res = await connectHealth(health);
+      setSource('health', { status: res.granted.length ? 'ready' : 'prompt', history: res.history, granted: res.granted, error: res.granted.length ? null : { title: 'Nothing was allowed', text: 'Allow at least steps, heart rate or sleep in Health Connect, then try again.' } });
+      if (res.granted.length) await actions.syncHealth();
+    } catch (e) {
+      setSource('health', { error: { title: 'Health Connect did not open', text: String(e?.message || e) } });
+    }
+  },
+
+  openHealthSettings() {
+    state.runtime?.health?.openHealthConnectSettings().catch(() => toast('Open the Health Connect app to change what GT 2 Logbook may read.', 5000));
+  },
+
+  syncHealth({ auto = false } = {}) {
+    const health = state.runtime?.health;
+    if (!health) return Promise.resolve(null);
+    return once('health', async () => {
+      setSource('health', { busy: true, progress: null, error: null });
+      try {
+        const prev = state.meta.sources?.healthconnect;
+        const since = healthSince(state.isSample ? null : prev?.range?.to, { history: state.health.history, today: todayKey() });
+        const res = await syncHealthConnect({ health, since, onProgress: (p) => setSource('health', { progress: p }) });
+        const r = res.report;
+        const info = sourceInfo(state.isSample ? null : prev, res.fragment, new Date().toISOString(), { days: r.days, nights: r.nights, workouts: r.workouts });
+        const { changed } = await applyFragment(res.fragment, 'healthconnect', info);
+        setSource('health', { busy: false, progress: null, report: r, status: 'ready' });
+        if (!auto || changed) toast(changed ? `Health Connect: ${plural(r.days, 'day')}, ${plural(r.nights, 'night')} and ${plural(r.workouts, 'workout')} read.` : 'Health Connect has nothing new.');
+        return r;
+      } catch (e) {
+        setSource('health', { busy: false, progress: null, error: { title: 'Health Connect sync failed', text: String(e?.message || e) } });
+        if (!auto) toast('Health Connect sync failed. See Data.', 5000);
+        return null;
+      }
+    });
+  },
+
+  /** Save the intervals.icu key (on this device only) and athlete id, then sync. */
+  async saveIntervals({ apiKey, athleteId }) {
+    state.runtime?.secrets?.set('intervals', apiKey || null);
+    await actions.saveSettings({ intervalsAthlete: athleteId || null });
+    if (apiKey) return actions.syncIntervals();
+    return null;
+  },
+
+  syncIntervals({ auto = false } = {}) {
+    const rt = state.runtime;
+    const apiKey = rt?.secrets?.get('intervals');
+    if (!apiKey || !rt.http) return Promise.resolve(null);
+    return once('intervals', async () => {
+      setSource('intervals', { busy: true, progress: null, error: null });
+      try {
+        const prev = state.isSample ? null : state.meta.sources?.intervals;
+        const oldest = prev?.range?.to ? addDays(prev.range.to < todayKey() ? prev.range.to : todayKey(), -3) : addDays(todayKey(), -365);
+        const known = new Set(Object.values(state.ds.workouts).filter((w) => w.hasTrack && w.source === 'intervals').map((w) => w.id));
+        const res = await syncIntervals({
+          http: rt.http, apiKey, athleteId: settings().intervalsAthlete || '0', oldest, newest: todayKey(), known,
+          onProgress: (p) => setSource('intervals', { progress: p }),
+        });
+        const r = res.report;
+        const info = sourceInfo(prev, res.fragment, new Date().toISOString(), { activities: r.activities, withStreams: r.withStreams, wellnessDays: r.wellnessDays });
+        const { changed } = await applyFragment(res.fragment, 'intervals', info);
+        setSource('intervals', { busy: false, progress: null, report: r });
+        if (!auto || changed) toast(changed ? `intervals.icu: ${plural(r.activities, 'activity', 'activities')} and ${plural(r.wellnessDays, 'day')} of wellness read.` : 'intervals.icu has nothing new.');
+        return r;
+      } catch (e) {
+        const text = e?.code === 'auth' ? 'intervals.icu did not accept the API key. Copy it again from intervals.icu → Settings → Developer.' : String(e?.message || e);
+        setSource('intervals', { busy: false, progress: null, error: { title: 'intervals.icu sync failed', text } });
+        if (!auto) toast('intervals.icu sync failed. See Data.', 5000);
+        return null;
+      }
+    });
+  },
+
+  /** App only: download the OpenStreetMap data for the routes and add it, in one step. */
+  async downloadMapNow(dl, onStatus = () => {}) {
+    actions.noteMapRequest(dl.areas);
+    onStatus('Downloading map data from OpenStreetMap…');
+    const res = await fetch(dl.url);
+    if (!res.ok) throw Object.assign(new Error(res.status === 429 || res.status === 504 ? 'The OpenStreetMap server is busy. Try again in a few minutes.' : `The OpenStreetMap server answered ${res.status}.`), { code: 'server_error' });
+    const text = await res.text();
+    onStatus(`Reading ${(text.length / 1e6).toFixed(1)} MB of map data…`);
+    return actions.addMapFile(new Blob([text], { type: 'application/json' }));
+  },
+
+  async setSecret(name, value) {
+    state.runtime?.secrets?.set(name, value || null);
+    render();
+  },
+});
+
+const plural = (n, one, many = `${one}s`) => `${n} ${n === 1 ? one : many}`;
 
 // ------------------------------------------------------------------ saving
 
@@ -427,14 +639,14 @@ function persist(tracks, diag, opts) {
 }
 
 async function persistNow(tracks, diag, { quiet = false } = {}) {
-  if (state.store.kind !== 'cloud') return { error: null };
+  if (!state.store.persistent) return { error: null };
   setBusy('Saving', { done: 0, total: 1 });
   try {
     const res = await state.store.save(state.ds, state.meta, { tracks, onProgress: (p) => setBusy('Saving', p) });
     if (diag) await state.store.saveDiag(diag).catch(() => {});
     if (res.error?.code === 'quota_exceeded') toast('Storage is full: some routes stay only in this session. Summaries are saved.', 6000);
     else if (res.error) toast(`Some data was not saved (${res.error.code || 'error'}). It is still shown; try importing again later.`, 6000);
-    else if (!quiet) toast('Saved to your private storage.');
+    else if (!quiet) toast(`Saved to ${state.store.where}.`);
     return res;
   } catch (e) {
     toast(`Saving failed (${e?.code || 'error'}). Your data is shown but not stored yet.`, 6000);
@@ -468,6 +680,11 @@ function renderChips() {
   if (state.drive?.busy) {
     const p = state.drive.progress;
     el.append(h('span', { class: 'chip', id: 'drive-chip' }, h('span', { class: 'dot' }), p?.total ? `Drive sync ${p.done}/${p.total}` : 'Drive sync…'));
+  }
+  for (const [name, label] of [['health', 'Health Connect'], ['intervals', 'intervals.icu']]) {
+    if (!state[name]?.busy) continue;
+    const p = state[name].progress;
+    el.append(h('span', { class: 'chip' }, h('span', { class: 'dot' }), p?.total ? `${label} ${Math.min(p.done + 1, p.total)}/${p.total}` : `${label}…`));
   }
   if (state.busy) {
     const pct = state.busy.total ? Math.round((state.busy.done / state.busy.total) * 100) : null;
@@ -535,8 +752,12 @@ function renderBanner() {
 function renderTabs() {
   for (const a of document.querySelectorAll('#tabs .tab')) {
     const r = a.dataset.route;
-    if (r === state.route || (state.route === 'workout' && r === 'workouts')) a.setAttribute('aria-current', 'page');
-    else a.removeAttribute('aria-current');
+    if (r === state.route || (state.route === 'workout' && r === 'workouts')) {
+      a.setAttribute('aria-current', 'page');
+      // On a phone the tab row scrolls: keep the current tab in view.
+      const bar = a.parentElement;
+      if (bar.scrollWidth > bar.clientWidth) bar.scrollTo({ left: a.offsetLeft - bar.clientWidth / 2 + a.offsetWidth / 2, behavior: 'smooth' });
+    } else a.removeAttribute('aria-current');
   }
 }
 
@@ -555,6 +776,9 @@ function viewCtx() {
     store: state.store,
     param: state.param,
     drive: state.drive,
+    health: state.health,
+    intervals: state.intervals,
+    platform,
     syncIndex: state.syncIndex,
     basemap: state.basemap,
     basemapIndex: state.basemapIndex,
@@ -596,7 +820,7 @@ async function boot() {
   update(parseHash());
   render();
   const runtime = await getRuntime();
-  let store = runtime.db && runtime.uid ? new CloudStore(runtime.db, runtime.uid) : new MemoryStore();
+  let store = runtime.db && runtime.uid ? new CloudStore(runtime.db, runtime.uid, { kind: runtime.storeKind }) : new MemoryStore();
   const importer = new Importer();
   update({ runtime, store, importer });
   let loaded = null;
@@ -607,14 +831,15 @@ async function boot() {
     store = new MemoryStore();
     update({ store });
     loaded = await store.load();
-    toast('Your private storage could not be reached; changes will not be saved in this view.', 6000);
+    toast(`${store.kind === 'device' ? 'Storage on this device' : 'Your private storage'} could not be reached; changes will not be saved in this view.`, 6000);
   }
   update({ meta: loaded.meta, diag: loaded.diag, syncIndex: loaded.syncIndex || null, basemapIndex: loaded.basemapIndex || null });
   if (isEmpty(loaded.ds)) await loadSample();
   else update({ ds: loaded.ds, isSample: false });
   update({ loading: false });
   render();
-  await checkDrive({ auto: true });
+  if (platform.app) await autoSyncApp();
+  else await checkDrive({ auto: true });
 }
 
 boot().catch((err) => {
