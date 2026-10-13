@@ -22,6 +22,7 @@
     "@zip.js/zip.js": "2.8.61",
     "d3": "7.9.0",
     "esbuild": "0.28.2",
+    "eslint": "10.11.0",
     "playwright": "1.56.1"
   },
   "engines": {
