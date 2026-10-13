@@ -4,7 +4,7 @@ import { addDays, daysBetween, weekStart, weekdayIndex, localMinuteOfDay, todayK
 import { chartBucket, BUCKETS } from './huawei/sport-types.js';
 import { EFFORTS } from './track.js';
 
-export const DEFAULT_SETTINGS = { stepGoal: 10000, sleepGoalMin: 480, maxHr: null, birthYear: null };
+export const DEFAULT_SETTINGS = { stepGoal: 10000, sleepGoalMin: 480, maxHr: null, birthYear: null, sex: null };
 
 export const PRESETS = [
   { key: '7d', label: '7D', days: 7 },
@@ -258,11 +258,15 @@ export const ZONES = [
   { key: 'z5', label: 'Zone 5 · Maximum', lo: 0.9, hi: 1.01 },
 ];
 
-/** Max HR: setting, else 220 − age, else the 98th percentile of workout maxima. */
+/**
+ * Max HR: setting, else Tanaka's 208 − 0.7 × age (Tanaka, Monahan & Seals
+ * 2001, a meta-analysis of 351 studies; closer than 220 − age past 40), else
+ * the 98th percentile of workout maxima.
+ */
 export function estimateMaxHr(ds, settings = DEFAULT_SETTINGS) {
   if (settings.maxHr > 100) return { value: settings.maxHr, basis: 'setting' };
   if (settings.birthYear > 1900) {
-    return { value: 220 - (new Date().getFullYear() - settings.birthYear), basis: 'age' };
+    return { value: Math.round(208 - 0.7 * (new Date().getFullYear() - settings.birthYear)), basis: 'age' };
   }
   const maxima = Object.values(ds.workouts).map((w) => w.maxHr).filter((v) => v > 100 && v < 230).sort((a, b) => a - b);
   if (maxima.length >= 3) {

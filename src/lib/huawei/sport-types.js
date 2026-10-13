@@ -67,22 +67,3 @@ export function sportFromCodes(outer, inner) {
   if (!Number.isFinite(code)) return { key: 'unknown', label: 'Workout', family: 'other', code: null };
   return { key: `type_${code}`, label: `Type ${code}`, family: 'other', code };
 }
-
-/** Map free-text activity types (GPX/TCX/CSV/intervals.icu) to a family. */
-export function familyFromText(text) {
-  const t = String(text || '').toLowerCase();
-  if (/swim/.test(t)) return 'swim';
-  if (/(run|jog|treadmill)/.test(t)) return 'run';
-  if (/(hik|climb|mountain|trek)/.test(t)) return 'hike';
-  if (/(walk)/.test(t)) return 'walk';
-  if (/(ride|cycl|bik|velo)/.test(t)) return 'ride';
-  if (/(strength|weight|gym|row|ellip|crossfit|yoga|pilates|training|hiit|rope)/.test(t)) return 'gym';
-  return 'other';
-}
-
-/** Display label for a free-text activity type. */
-export function labelFromText(text) {
-  const s = String(text || '').replace(/([a-z])([A-Z])/g, '$1 $2').replace(/_/g, ' ').trim();
-  if (!s) return 'Workout';
-  return s.charAt(0).toUpperCase() + s.slice(1).toLowerCase();
-}

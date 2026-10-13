@@ -6,6 +6,8 @@ import { trackPoints } from '../../lib/gpx.js';
 import { estimateMaxHr, zonesFromHist, zoneBounds, ZONES } from '../../lib/stats.js';
 import { fmtPace, fmtDuration, fmtInt, fmtOne, fmtKm } from '../../lib/format.js';
 import { chartBucket } from '../../lib/huawei/sport-types.js';
+import { workoutTrimp, edwardsTrimp, seilerZones, restingHrOn } from '../../lib/models/load.js';
+import { vdot, raceTime, aerobicDecoupling } from '../../lib/models/running.js';
 
 const ZONE_MIX = [30, 48, 66, 84, 100];
 
@@ -102,6 +104,8 @@ export function renderWorkout(root, ctx) {
       h('p', { class: 'chart-sub', text: 'How the watch rated this workout. Training effect runs from 0 to 5; recovery time is what the watch advised when you finished.' }),
       h('div', { class: 'stat-row', id: 'training-stats' }, ...training)));
   }
+  const modelPanel = loadPanel(w, ctx, stat);
+  if (modelPanel) root.append(modelPanel);
   if (w.abnormal) root.append(h('div', { class: 'msg' }, h('strong', { text: 'Huawei flagged this workout' }), 'The watch marked some of its data as unreliable (for example pace or distance), so treat the numbers with care.'));
 
   const body = h('div', { class: 'view' }, h('p', { class: 'loading', text: w.hasTrack ? 'Loading the route and samples…' : '' }));
@@ -117,7 +121,7 @@ export function renderWorkout(root, ctx) {
       out.push(chartCard({
         id: 'zones',
         title: 'Time in heart-rate zones',
-        sub: `Zones from max HR ${maxHr.value} bpm (${maxHr.basis === 'setting' ? 'your setting' : maxHr.basis === 'age' ? 'from your birth year' : maxHr.basis === 'workouts' ? 'estimated from your workouts' : 'default'}). Change it under Data → Settings.`,
+        sub: `Zones from max HR ${maxHr.value} bpm (${maxHr.basis === 'setting' ? 'your setting' : maxHr.basis === 'age' ? 'from your birth year, Tanaka formula' : maxHr.basis === 'workouts' ? 'estimated from your workouts' : 'default'}). Change it under Data → Settings.`,
         render: (el, width) => hBars(el, width, { rows, format: (v) => fmtDuration(v) }),
         table: () => ({ columns: [{ label: 'Zone', get: (r) => r.label }, { label: 'Time', get: (r) => fmtDuration(r.value), r: true }], rows }),
       }));
@@ -147,6 +151,11 @@ export function renderWorkout(root, ctx) {
   const draw = (track) => {
     clear(body);
     const pts = track ? trackPoints(track) : [];
+    const dec = w.family === 'run' || w.family === 'ride' ? aerobicDecoupling(pts) : null;
+    if (dec && modelPanel) {
+      modelPanel.querySelector('.stat-row').append(stat('Aerobic decoupling', `${dec.decoupling > 0 ? '+' : ''}${dec.decoupling.toFixed(1)}`, '%'));
+      modelPanel.append(h('p', { class: 'chart-sub', style: { margin: '8px 0 0' }, text: `Decoupling compares speed per heartbeat in the second half with the first, after a 10-minute warm-up (Friel). ${Math.abs(dec.decoupling) < 5 ? 'Under 5 %: your aerobic base held up for this duration.' : 'Over 5 %: heart rate drifted up against pace — usual on hot days, hills, or when the session is longer than your base supports.'}` }));
+    }
     const foot = w.family !== 'ride';
     if (pts.some((p) => p.pos)) {
       let metric = foot ? 'pace' : 'speed';
@@ -233,4 +242,42 @@ export function renderWorkout(root, ctx) {
 
   if (w.hasTrack) ctx.actions.loadTrack(w.id).then(draw).catch(() => draw(null));
   else draw(null);
+}
+
+/** Model numbers for one workout: load, intensity zones, and for runs VDOT, VO2max and efficiency. */
+function loadPanel(w, ctx, stat) {
+  const { ds, settings } = ctx;
+  const max = estimateMaxHr(ds, settings).value;
+  const rest = restingHrOn(ds, w.date);
+  const t = workoutTrimp(w, { rest, max, sex: settings.sex });
+  const out = [];
+  if (t) out.push(stat('Banister TRIMP', fmtInt(t.trimp)));
+  const ed = edwardsTrimp(w, max);
+  if (ed != null) out.push(stat('Edwards TRIMP', fmtInt(ed)));
+  const z = seilerZones(w, max);
+  const zt = z ? z[0] + z[1] + z[2] : 0;
+  if (zt > 0) out.push(stat('Easy · moderate · hard', z.map((v) => Math.round((v / zt) * 100)).join(' · '), '%'));
+  const notes = [];
+  if (w.family === 'run' && w.distance >= 3000 && w.duration >= 600) {
+    const v = vdot(w.distance, w.duration);
+    if (v > 15 && v < 90) {
+      out.push(stat('VDOT of this run', fmtOne(v)));
+      notes.push(`As a race effort this would match a ${fmtDuration(raceTime(v, 10000))} 10 km (Daniels & Gilbert); easy runs understate fitness.`);
+    }
+    if (w.avgHr > 0 && max > rest) {
+      const hrr = (w.avgHr - rest) / (max - rest);
+      const flat = (w.ascent || 0) / w.distance <= 0.015;
+      if (hrr >= 0.5 && hrr <= 0.95 && flat && w.duration >= 900) {
+        const vmin = w.distance / (w.duration / 60);
+        out.push(stat('VO2max estimate', fmtOne(3.5 + (0.2 * vmin) / hrr), 'ml/kg/min'));
+        out.push(stat('Efficiency factor', (vmin / w.avgHr).toFixed(2), 'm/min/beat'));
+        notes.push(`VO2max from pace and ${Math.round(hrr * 100)} % of heart-rate reserve (ACSM; Swain & Leutholtz 1997).`);
+      }
+    }
+  }
+  if (!out.length) return null;
+  return h('div', { class: 'panel', id: 'workout-models' },
+    h('h3', { class: 'chart-title', text: 'Load and efficiency' }),
+    h('p', { class: 'chart-sub', text: `Banister TRIMP from heart-rate reserve (rest ${Math.round(rest)}, max ${max} bpm${t?.basis === 'avg' ? ', from average HR' : ''}); zones after Seiler. ${notes.join(' ')}` }),
+    h('div', { class: 'stat-row' }, ...out));
 }

@@ -4,14 +4,14 @@
 import { toCsv } from '../lib/csv.js';
 import { toGpx, toTcx } from '../lib/gpx.js';
 import { fmtDuration, fmtPace, fmtClock } from '../lib/format.js';
-import { workoutList } from '../lib/model.js';
+import { backupJson } from '../lib/backup.js';
 import { toast } from './ui.js';
 
 const stamp = () => new Date().toISOString().slice(0, 10);
 
 async function save(downloads, filename, data) {
   if (!downloads) {
-    toast('Downloads work inside claude.ai. Open the artifact there to save files.');
+    toast('Saving files is not available in this view.');
     return false;
   }
   try {
@@ -84,9 +84,8 @@ export async function exportDailyCsv(downloads, ds) {
   return save(downloads, `gt2-daily-${stamp()}.csv`, dailyCsv(ds));
 }
 
-export async function exportBackup(downloads, ds, tracks) {
-  const body = JSON.stringify({ app: 'GT 2 Logbook', exportedAt: new Date().toISOString(), days: ds.days, nights: ds.nights, workouts: workoutList(ds, { asc: true }), tracks });
-  return save(downloads, `gt2-logbook-backup-${stamp()}.json`, body);
+export async function exportBackup(downloads, ds, tracks, meta) {
+  return save(downloads, `gt2-logbook-backup-${stamp()}.json`, backupJson(ds, tracks, meta));
 }
 
 /**

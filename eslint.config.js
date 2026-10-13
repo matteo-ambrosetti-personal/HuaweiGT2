@@ -5,7 +5,7 @@ const browser = {
   URL: 'readonly', Worker: 'readonly', WritableStream: 'readonly', TextDecoder: 'readonly', TextEncoder: 'readonly',
   AbortController: 'readonly', Node: 'readonly', setTimeout: 'readonly', clearTimeout: 'readonly', console: 'readonly',
   structuredClone: 'readonly', self: 'readonly', fetch: 'readonly', Response: 'readonly', crypto: 'readonly',
-  atob: 'readonly', btoa: 'readonly',
+  atob: 'readonly', btoa: 'readonly', indexedDB: 'readonly', IDBKeyRange: 'readonly', FileReader: 'readonly', history: 'readonly',
 };
 const node = { process: 'readonly', console: 'readonly', Buffer: 'readonly', URL: 'readonly', setTimeout: 'readonly' };
 

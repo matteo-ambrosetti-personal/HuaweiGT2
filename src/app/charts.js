@@ -118,7 +118,7 @@ export function dailyBars(el, width, { rows, color, avg, avgLabel = '7-day avera
 /**
  * Stacked columns. rows: [{key, label, ...values}], keys: [{key, label, color}]
  */
-export function stackedBars(el, width, { rows, keys, height = 220, yFormat = compact, xLabel, title, tipTitle, tipValue, goal, goalLabel, onClick, maxBar = 24, tickUnit }) {
+export function stackedBars(el, width, { rows, keys, height = 220, yFormat = compact, xLabel, title, tipTitle, tipValue, goal, goalLabel, onClick, maxBar = 24, tickUnit, yMax }) {
   const m = { ...MARGIN, left: 44 };
   const innerW = width - m.left - m.right, innerH = height - m.top - m.bottom;
   const svg = svgRoot(el, width, height, title);
@@ -126,10 +126,10 @@ export function stackedBars(el, width, { rows, keys, height = 220, yFormat = com
   if (!rows.length || !d3.max(totals)) return emptyMessage(svg, width, height);
   const g = svg.append('g').attr('transform', `translate(${m.left},${m.top})`);
   const x = d3.scaleBand().domain(rows.map((r) => r.key)).range([0, innerW]).paddingInner(rows.length > 40 ? 0.12 : 0.28);
-  const top = Math.max(d3.max(totals), goal || 0) * 1.08;
+  const top = yMax ?? Math.max(d3.max(totals), goal || 0) * 1.08;
   const ht = tickUnit ? hourTicks(top, tickUnit) : null;
   const y = d3.scaleLinear().domain([0, ht ? ht.max : top]).range([innerH, 0]);
-  if (!ht) y.nice();
+  if (!ht && yMax == null) y.nice();
   gridY(g, y, innerW, 4, yFormat, ht?.ticks);
   const bw = Math.min(maxBar, x.bandwidth());
   const off = (x.bandwidth() - bw) / 2;
@@ -182,7 +182,7 @@ export function stackedBars(el, width, { rows, keys, height = 220, yFormat = com
  * series: [{key, label, color, points:[{x: Date, y}], width?, dots?}]
  * band: {points:[{x, lo, hi}], color, label}
  */
-export function lineChart(el, width, { series, band, height = 220, yFormat = compact, tipFormat, yDomain, invertY = false, title, xFormat, xTicks, zeroBased = false, refLines = [] }) {
+export function lineChart(el, width, { series, band, height = 220, yFormat = compact, tipFormat, yDomain, invertY = false, title, xFormat, xTicks, zeroBased = false, refLines = [], spans = [], spanColor = 'var(--ink-2)', tipTitle }) {
   const m = { ...MARGIN, left: 44 };
   const innerW = width - m.left - m.right, innerH = height - m.top - m.bottom;
   const svg = svgRoot(el, width, height, title);
@@ -200,6 +200,11 @@ export function lineChart(el, width, { series, band, height = 220, yFormat = com
   const y = d3.scaleLinear().domain(invertY ? [hi + padY, lo - padY] : [lo - (zeroBased ? 0 : padY), hi + padY]).nice().range([innerH, 0]);
   gridY(g, y, innerW, 4, yFormat);
   timeAxis(g, x, innerH, innerW, { format: xFormat, ticks: xTicks, long: (x.domain()[1] - x.domain()[0]) > 400 * 864e5 });
+  // Shaded time spans (e.g. sleep) behind everything else.
+  for (const sp of spans) {
+    const x0 = Math.max(0, x(sp.from)), x1 = Math.min(innerW, x(sp.to));
+    if (x1 > x0) g.append('rect').attr('x', x0).attr('y', 0).attr('width', x1 - x0).attr('height', innerH).attr('fill', sp.color || spanColor).attr('opacity', 0.08);
+  }
   if (bandPts.length) {
     const area = d3.area().x((p) => x(p.x)).y0((p) => y(p.lo)).y1((p) => y(p.hi)).curve(d3.curveMonotoneX);
     g.append('path').attr('d', area(bandPts)).attr('fill', band.color).attr('opacity', 0.12);
@@ -253,7 +258,7 @@ export function lineChart(el, width, { series, band, height = 220, yFormat = com
         if (b && b.lo != null) rows.push({ label: band.label, value: `${(tipFormat || yFormat)(b.lo)}–${(tipFormat || yFormat)(b.hi)}`, color: band.color, kind: 'box' });
       }
       const [cx, cy] = pointerXY(event);
-      if (rows.length) showTip(cx, cy, d3.utcFormat('%a %d %b %Y')(new Date(xv)), rows);
+      if (rows.length) showTip(cx, cy, tipTitle ? tipTitle(new Date(xv)) : d3.utcFormat('%a %d %b %Y')(new Date(xv)), rows);
     })
     .on('pointerleave', () => { cross.attr('opacity', 0); dots.selectAll('*').remove(); hideTip(); });
 }
@@ -389,14 +394,15 @@ export function rangeBars(el, width, { rows, color, height = 220, title }) {
 // ------------------------------------------------------------------ simple column profile
 
 /** Columns for categories (weekday or hour profiles). rows: [{label, value}] */
-export function columns(el, width, { rows, color, height = 180, yFormat = compact, valueLabel, tipFormat, highlight, tickUnit }) {
+export function columns(el, width, { rows, color, height = 180, yFormat = compact, valueLabel, tipFormat, highlight, tickUnit, overlay }) {
   const m = { ...MARGIN, left: 40 };
   const innerW = width - m.left - m.right, innerH = height - m.top - m.bottom;
   const svg = svgRoot(el, width, height, valueLabel);
   if (!rows.some((r) => r.value)) return emptyMessage(svg, width, height);
   const g = svg.append('g').attr('transform', `translate(${m.left},${m.top})`);
   const x = d3.scaleBand().domain(rows.map((r) => r.label)).range([0, innerW]).paddingInner(0.3);
-  const top = d3.max(rows, (r) => r.value || 0) * 1.1;
+  const overlayVals = overlay ? rows.map((r, i) => overlay.fn(i, r)) : [];
+  const top = Math.max(d3.max(rows, (r) => r.value || 0), d3.max(overlayVals) || 0) * 1.1;
   const ht = tickUnit ? hourTicks(top, tickUnit) : null;
   const y = d3.scaleLinear().domain([0, ht ? ht.max : top]).range([innerH, 0]);
   if (!ht) y.nice();
@@ -410,11 +416,20 @@ export function columns(el, width, { rows, color, height = 180, yFormat = compac
   g.append('g').attr('class', 'axis').selectAll('text').data(rows.filter((_, i) => i % every === 0)).join('text')
     .attr('x', (r) => x(r.label) + x.bandwidth() / 2).attr('y', innerH + 17).attr('text-anchor', 'middle').text((r) => r.label);
   g.append('line').attr('x1', 0).attr('x2', innerW).attr('y1', innerH).attr('y2', innerH).attr('stroke', 'var(--line)');
+  if (overlay) {
+    // A fitted curve over the columns, sampled finely between band centres.
+    const pts = d3.range(0, rows.length - 1 + 1e-9, 0.1).map((i) => [x(rows[Math.floor(i)].label) + x.bandwidth() / 2 + (i % 1) * x.step(), y(overlay.fn(i))]);
+    g.append('path').attr('d', d3.line().curve(d3.curveMonotoneX)(pts)).attr('fill', 'none').attr('stroke', overlay.color || 'var(--ink)').attr('stroke-width', 2).attr('stroke-linecap', 'round');
+  }
   g.append('g').selectAll('rect').data(rows).join('rect')
     .attr('x', (r) => x(r.label)).attr('y', 0).attr('width', x.bandwidth()).attr('height', innerH).attr('fill', 'transparent')
     .on('pointermove', (event, r) => {
       const [cx, cy] = pointerXY(event);
-      showTip(cx, cy, r.title || r.label, [{ label: valueLabel, value: r.value == null ? '—' : (tipFormat || yFormat)(r.value), color, kind: 'box' }]);
+      const i = rows.indexOf(r);
+      showTip(cx, cy, r.title || r.label, [
+        { label: valueLabel, value: r.value == null ? '—' : (tipFormat || yFormat)(r.value), color, kind: 'box' },
+        ...(overlay ? [{ label: overlay.label, value: (tipFormat || yFormat)(overlayVals[i]), color: overlay.color || 'var(--ink)' }] : []),
+      ]);
     })
     .on('pointerleave', hideTip);
 }

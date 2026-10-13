@@ -1,7 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { CloudStore, MemoryStore, defaultMeta } from '../src/app/store.js';
-import { emptyIndex } from '../src/app/sync-drive.js';
 import { emptyDataset, mergeDataset } from '../src/lib/model.js';
 
 // Like the platform's db, reads hand back deep-frozen bodies.
@@ -41,48 +40,27 @@ function fakeDb() {
   };
 }
 
-test('the Drive sync index round-trips through private storage', async () => {
+test('a Drive sync index left by older versions is not data, and Delete all removes it', async () => {
   const db = fakeDb();
   const store = new CloudStore(db, 'u1');
   const ds = emptyDataset();
-  mergeDataset(ds, { days: { '2026-03-08': { steps: 75 } } }, 'healthsync');
+  mergeDataset(ds, { days: { '2026-03-08': { steps: 75 } } }, 'export');
   await store.save(ds, defaultMeta());
-  const index = { ...emptyIndex(), cursor: 123, files: { a: [123, 'steps', '2026-03-08', '2026-03-08'] } };
-  await store.saveSyncIndex(index);
+  db.docs.set('data/users/u1/hsync', { v: 1, cursor: 123, files: { a: [123, 'steps', '2026-03-08', '2026-03-08'] } });
 
   const loaded = await store.load();
-  assert.deepEqual(loaded.syncIndex, index);
   assert.equal(loaded.ds.days['2026-03-08'].steps, 75);
   assert.equal(Object.keys(loaded.ds.days).length, 1, 'the index is not read as data');
-
-  // Later saves keep it; deleting everything removes it.
-  mergeDataset(ds, { days: { '2026-04-01': { steps: 5 } } }, 'healthsync');
-  await store.save(ds, loaded.meta);
-  assert.ok(db.docs.has('data/users/u1/hsync'));
+  assert.equal('syncIndex' in loaded, false);
   await store.clear(loaded.meta);
   assert.equal(db.docs.size, 0);
-
-  const huge = { ...emptyIndex(), files: { x: ['y'.repeat(300 * 1024)] } };
-  await assert.rejects(store.saveSyncIndex(huge), { code: 'invalid_argument' });
-});
-
-test('the memory store keeps the sync index across saves', async () => {
-  const mem = new MemoryStore();
-  assert.equal((await mem.load()).syncIndex, null);
-  const index = { ...emptyIndex(), cursor: 5 };
-  await mem.saveSyncIndex(index);
-  const ds = emptyDataset();
-  mergeDataset(ds, { days: { '2026-03-08': { steps: 1 } } }, 'healthsync');
-  await mem.save(ds, defaultMeta());
-  await mem.saveMeta(defaultMeta());
-  assert.deepEqual((await mem.load()).syncIndex, index);
 });
 
 test('data loaded from storage can be updated (snapshots are frozen)', async () => {
   const db = fakeDb();
   const store = new CloudStore(db, 'u2');
   const ds = emptyDataset();
-  mergeDataset(ds, { days: { '2026-03-08': { steps: 75 } } }, 'healthsync');
+  mergeDataset(ds, { days: { '2026-03-08': { steps: 75 } } }, 'export');
   const w = { id: 'hw-1', date: '2026-03-08', start: Date.UTC(2026, 2, 8, 7), duration: 600, family: 'other', label: 'Type NaN' };
   mergeDataset(ds, { workouts: { 'hw-1': w } }, 'export');
   await store.save(ds, defaultMeta());

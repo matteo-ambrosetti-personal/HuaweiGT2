@@ -1,0 +1,166 @@
+# Tests the logbook, builds the Android app and publishes the APK.
+#
+#  - Every push (pull requests show the checks of their branch): unit tests,
+#    lint, both end-to-end suites (artifact and app), then an APK attached to
+#    the run as an artifact.
+#  - Pushes to the default branch (and manual runs with "publish"): the APK
+#    is also published as a GitHub release, so the newest build is always at
+#    https://github.com/<owner>/<repo>/releases/latest/download/gt2-logbook.apk
+#
+# Signing: add the repository secrets ANDROID_KEYSTORE_BASE64 (the keystore,
+# base64-encoded) and ANDROID_KEYSTORE_PASSWORD (optionally ANDROID_KEY_ALIAS,
+# default "gt2logbook", and ANDROID_KEY_PASSWORD) and every build is signed
+# with the same key, so new versions install over the old one and keep your
+# data. Without them, builds use a throwaway key (see docs/android.md).
+
+name: Android app
+
+on:
+  push:
+  workflow_dispatch:
+    inputs:
+      publish:
+        description: Publish the APK as the latest release
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: android-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npm run lint
+      - run: npm test
+      - name: Build the artifact page and the app
+        run: npm run build && npm run build:app
+      - run: npm run fixture
+      - run: npx playwright install --with-deps chromium
+      - name: End-to-end (artifact page)
+        run: npm run test:e2e
+      - name: End-to-end (app build, phone size)
+        run: npm run test:e2e:app
+      - name: Keep the screenshots
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: screenshots
+          path: screenshots/
+          if-no-files-found: ignore
+          retention-days: 7
+
+  apk:
+    needs: test
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22
+          cache: npm
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: 21
+          cache: gradle
+          cache-dependency-path: |
+            android/**/*.gradle*
+            android/gradle/wrapper/gradle-wrapper.properties
+      - uses: android-actions/setup-android@v3
+        with:
+          # The default list includes "tools", a package the SDK no longer has.
+          packages: platform-tools platforms;android-36
+      - run: npm ci
+      - name: Build the web app into the Android project
+        run: npm run build:app && npx cap sync android
+
+      - name: Version
+        id: version
+        run: |
+          echo "name=$(node -p "require('./package.json').version")" >> "$GITHUB_OUTPUT"
+          echo "code=${{ github.run_number }}" >> "$GITHUB_OUTPUT"
+
+      - name: Signing key (from secrets, when set)
+        id: key
+        env:
+          KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+        run: |
+          if [ -n "$KEYSTORE_BASE64" ]; then
+            echo "$KEYSTORE_BASE64" | base64 -d > "$RUNNER_TEMP/release.keystore"
+            echo "ANDROID_KEYSTORE_FILE=$RUNNER_TEMP/release.keystore" >> "$GITHUB_ENV"
+            echo "signed=release" >> "$GITHUB_OUTPUT"
+          else
+            echo "::warning::No ANDROID_KEYSTORE_BASE64 secret: the APK is signed with a throwaway key, so it cannot update an installed copy. See docs/android.md."
+            echo "signed=throwaway" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Build the APK
+        working-directory: android
+        env:
+          VERSION_CODE: ${{ steps.version.outputs.code }}
+          VERSION_NAME: ${{ steps.version.outputs.name }}
+          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+        run: |
+          chmod +x gradlew
+          ./gradlew assembleRelease --no-daemon --stacktrace
+          mkdir -p ../apk
+          cp app/build/outputs/apk/release/app-release.apk ../apk/gt2-logbook.apk
+          rm -f "$RUNNER_TEMP/release.keystore"
+
+      - name: Check the APK
+        run: |
+          AAPT="$(ls -d "$ANDROID_HOME"/build-tools/* | sort -V | tail -1)/aapt2"
+          "$AAPT" dump badging apk/gt2-logbook.apk | grep -E "^(package|sdkVersion|targetSdkVersion|application-label):"
+          "$AAPT" dump permissions apk/gt2-logbook.apk
+          # The export ZIP is the only data source: no Health Connect access.
+          if "$AAPT" dump permissions apk/gt2-logbook.apk | grep -i "permission.health"; then
+            echo "::error::The APK asks for Health Connect permissions"
+            exit 1
+          fi
+          ls -l apk/
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: gt2-logbook-${{ steps.version.outputs.name }}-build${{ steps.version.outputs.code }}
+          path: apk/gt2-logbook.apk
+          retention-days: 30
+
+      - name: Publish as the latest release
+        if: (github.event_name == 'push' && github.ref == format('refs/heads/{0}', github.event.repository.default_branch)) || (github.event_name == 'workflow_dispatch' && inputs.publish)
+        env:
+          GH_TOKEN: ${{ github.token }}
+          NAME: ${{ steps.version.outputs.name }}
+          CODE: ${{ steps.version.outputs.code }}
+          SIGNED: ${{ steps.key.outputs.signed }}
+        run: |
+          TAG="app-v${NAME}-build${CODE}"
+          {
+            echo "GT 2 Logbook ${NAME} for Android (build ${CODE}, commit ${GITHUB_SHA::7})."
+            echo
+            echo "**Install:** open this page on your phone, download \`gt2-logbook.apk\` and open it. Android asks once to allow installs from your browser."
+            echo
+            if [ "$SIGNED" = "release" ]; then
+              echo "Signed with the project key: it installs over earlier builds and keeps your data."
+            else
+              echo "⚠️ Signed with a throwaway key: it cannot install over a copy signed with another key. Uninstall the old one, install this one and import your Huawei export ZIP again."
+            fi
+          } > "$RUNNER_TEMP/notes.md"
+          gh release create "$TAG" apk/gt2-logbook.apk --target "$GITHUB_SHA" \
+            --title "GT 2 Logbook ${NAME} (build ${CODE})" --notes-file "$RUNNER_TEMP/notes.md" --latest

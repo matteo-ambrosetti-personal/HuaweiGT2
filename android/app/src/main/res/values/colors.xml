@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- The page background (bg token in styles.css), so system bars and the splash match the app. -->
+    <color name="gt2_bg">#F4F6F7</color>
+    <color name="gt2_ink">#111C24</color>
+</resources>

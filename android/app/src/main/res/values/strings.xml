@@ -1,0 +1,7 @@
+<?xml version='1.0' encoding='utf-8'?>
+<resources>
+    <string name="app_name">GT 2 Logbook</string>
+    <string name="title_activity_main">GT 2 Logbook</string>
+    <string name="package_name">app.gt2logbook</string>
+    <string name="custom_url_scheme">app.gt2logbook</string>
+</resources>

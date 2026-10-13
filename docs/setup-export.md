@@ -1,6 +1,6 @@
 # Getting your Huawei Health export
 
-The privacy export is the only complete copy of your watch data. It holds:
+The privacy export is the only complete copy of your watch data, and the only thing GT 2 Logbook reads. It holds:
 - every workout, with its GPS track;
 - per-minute steps;
 - heart rate;
@@ -18,11 +18,11 @@ The email with the download link usually arrives within a day; Huawei allows up 
 
 ## Import it
 
-Open the artifact → **Data** → drop the ZIP (or choose it) → enter the password → **Import**.
+Open the app (or the artifact) → **Data** → choose the ZIP (or drop it) → enter the password → **Import**. Choose the ZIP exactly as Huawei sent it; do not unzip it first.
 
-- **Where it is read:** your browser decrypts and parses the file. The ZIP itself is never uploaded.
+- **Where it is read:** your phone (or browser) decrypts and parses the file. The ZIP itself is never uploaded.
 - **What happens to old data:** a new import merges with what is already there. Records with the same ID are replaced, and days already covered are refreshed.
-- **If the ZIP will not open:** extract it with 7-Zip and choose the extracted folder instead. Windows Explorer cannot open AES ZIPs.
+- **If the ZIP will not open:** check the password (it is the one you chose when requesting the data), and download the ZIP again in case the download was cut short.
 
 ## When something looks wrong
 

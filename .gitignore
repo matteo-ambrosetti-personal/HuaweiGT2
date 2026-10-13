@@ -12,3 +12,9 @@ screenshots/
 *.zip
 exports/
 HUAWEI_HEALTH_*/
+
+# App build output (built in CI; www/ is copied into the APK by `cap sync`)
+www/
+android/app/release/
+*.keystore
+*.jks

@@ -35,6 +35,10 @@
   --heat-2: #74bd68;
   --heat-3: #2f962f;
   --heat-4: #0b5e10;
+  /* diverging pair (polarity: fatigue ↔ fresh, negative ↔ positive), gray midpoint */
+  --div-cool: #3b6fb6;
+  --div-warm: #d0612f;
+  --div-mid: #e6e9ec;
   --good: #0ca30c;
   --good-text: #006300;
   --warning: #fab219;
@@ -97,6 +101,9 @@
     --heat-3: #44a54a;
     --heat-4: #86d98a;
     --good-text: #3fbf3f;
+    --div-cool: #5b8fd6;
+    --div-warm: #d8733f;
+    --div-mid: #2a3237;
     --map-land: #182027;
     --map-water: #1f3b52;
     --map-water-label: #84b5da;
@@ -146,6 +153,9 @@
   --heat-3: #44a54a;
   --heat-4: #86d98a;
   --good-text: #3fbf3f;
+  --div-cool: #5b8fd6;
+  --div-warm: #d8733f;
+  --div-mid: #2a3237;
   --map-land: #182027;
   --map-water: #1f3b52;
   --map-water-label: #84b5da;
@@ -163,6 +173,8 @@
 }
 
 * { box-sizing: border-box; }
+/* Elements hidden with the attribute stay hidden whatever their display (the app build has no publisher stylesheet to do this). */
+[hidden] { display: none !important; }
 html { -webkit-text-size-adjust: 100%; }
 body {
   background: var(--bg);
@@ -442,7 +454,41 @@ footer.foot { max-width: var(--maxw); margin: 0 auto; padding: 0 var(--gutter) 3
   * { transition: none !important; animation: none !important; }
 }
 @media (max-width: 520px) {
+  .tiles { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
+  .tile { padding: 10px 12px 8px; }
   .tile .value { font-size: 22px; }
   .brand .sub { display: none; }
   th, td { padding: 7px 9px; }
 }
+
+/* ------------------------------------------------------------------ insights */
+.insight-feed { display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: 12px; }
+.insight-feed .feed-head { grid-column: 1 / -1; margin: 6px 0 0; font-size: 12px; font-weight: 600; color: var(--ink-2); letter-spacing: 0.04em; text-transform: uppercase; }
+.insight { background: var(--surface); border: 1px solid var(--hair); border-radius: var(--radius); padding: 12px 14px; display: flex; flex-direction: column; gap: 6px; border-left-width: 3px; }
+.insight.watch { border-left-color: var(--warning); }
+.insight.good { border-left-color: var(--good); }
+.insight.info { border-left-color: var(--line); }
+.insight-top { display: flex; flex-direction: column; gap: 4px; align-items: flex-start; }
+.insight h4 { margin: 0; font-size: 14px; font-weight: 600; line-height: 1.35; }
+.insight p { margin: 0; color: var(--ink-2); font-size: 13px; }
+.insight .cite { color: var(--muted); font-size: 11.5px; }
+.badge.tone-watch { background: color-mix(in srgb, var(--warning) 18%, transparent); color: var(--ink); }
+.badge.tone-good { background: color-mix(in srgb, var(--good) 15%, transparent); color: var(--ink); }
+.readiness { display: flex; flex-direction: column; gap: 4px; }
+.readiness .label { font-size: 12px; color: var(--ink-2); }
+.ready-score { font-size: 52px; font-weight: 600; line-height: 1; letter-spacing: -0.02em; }
+.ready-score small { font-size: 15px; color: var(--ink-2); font-weight: 500; margin-left: 4px; }
+.ready-word { font-weight: 600; color: var(--ink-2); }
+.meter { height: 8px; border-radius: 4px; background: var(--surface-2); overflow: hidden; margin: 6px 0 10px; }
+.meter > div { height: 100%; border-radius: 4px; background: var(--ink); }
+.ready-parts { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 6px; }
+.ready-parts li { display: grid; grid-template-columns: 1fr 96px; gap: 8px; align-items: center; font-size: 12.5px; color: var(--ink-2); }
+.div-bar { position: relative; height: 8px; background: var(--surface-2); border-radius: 4px; }
+.div-bar::after { content: ""; position: absolute; left: 50%; top: -2px; bottom: -2px; width: 1px; background: var(--line); }
+.div-bar > span { position: absolute; top: 0; bottom: 0; border-radius: 4px; }
+.div-bar > .pos { background: var(--div-cool); }
+.div-bar > .neg { background: var(--div-warm); }
+.refs dd { color: var(--ink-2); font-size: 12.5px; }
+.methods summary { margin-bottom: 6px; }
+.pace-table td:first-child { font-weight: 600; }
+.native .topbar { top: 0; }

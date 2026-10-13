@@ -1,11 +1,13 @@
-// Persistence. CloudStore keeps everything in the artifact's db under the
-// viewer's private subtree data/users/<uid>/ (invisible to other viewers).
-// MemoryStore is the fallback when db is unavailable (local copy, signed out).
+// Persistence. CloudStore keeps everything in a document db under
+// data/users/<uid>/: the artifact's db (the viewer's private subtree,
+// invisible to other viewers), or the app's on-device storage (local-docs.js).
+// MemoryStore is the fallback when neither is available (local copy, signed out).
 //
-// Layout: meta · diag · hsync (Drive sync index) · basemap (map index) ·
+// Layout: meta · diag · basemap (map index) ·
 // days-YYYY-MM · wk-YYYY-MM · sleep-YYYY-MM, plus tracks/items/<workoutId> and
 // basemap/items/<chunkId>. Only month documents whose content hash changed
-// are written.
+// are written. An "hsync" document left by earlier versions (the Google Drive
+// sync index) is skipped on load and removed with everything else.
 
 import { emptyDataset } from '../lib/model.js';
 import { decodePolyline, encodePolyline } from '../lib/geo.js';
@@ -132,17 +134,19 @@ export function fitTrack(track) {
 }
 
 export class CloudStore {
-  constructor(db, uid) {
+  /** kind 'cloud' (claude.ai storage) or 'device' (this phone or browser). */
+  constructor(db, uid, { kind = 'cloud' } = {}) {
     this.db = db;
     this.base = `data/users/${uid}`;
-    this.kind = 'cloud';
+    this.kind = kind;
+    this.persistent = true;
+    this.where = kind === 'device' ? 'this device' : 'your private storage';
   }
 
   async load() {
     const snap = await withRetry(() => this.db.collection(this.base).limit(1000).get());
     let meta = defaultMeta();
     let diag = null;
-    let syncIndex = null;
     let basemapIndex = null;
     const parts = [];
     for (const doc of snap.docs) {
@@ -152,11 +156,11 @@ export class CloudStore {
       if (!data) continue;
       if (doc.id === 'meta') meta = { ...defaultMeta(), ...data };
       else if (doc.id === 'diag') diag = data;
-      else if (doc.id === 'hsync') syncIndex = data;
+      else if (doc.id === 'hsync') continue;
       else if (doc.id === 'basemap') basemapIndex = data;
       else parts.push(data);
     }
-    return { ds: docsToDataset(parts), meta, diag, syncIndex, basemapIndex };
+    return { ds: docsToDataset(parts), meta, diag, basemapIndex };
   }
 
   async loadTrack(id) {
@@ -197,13 +201,6 @@ export class CloudStore {
   async saveDiag(diag) {
     const body = JSON.stringify(diag).length > MAX_DOC ? { note: 'too large', at: diag.at } : diag;
     await withRetry(() => this.db.doc(`${this.base}/diag`).set(clean(body)));
-  }
-
-  /** The Drive sync index (kept small by fitIndex in sync-drive.js). */
-  async saveSyncIndex(index) {
-    const body = clean(index);
-    if (JSON.stringify(body).length > MAX_DOC) throw Object.assign(new Error('Sync index too large'), { code: 'invalid_argument' });
-    await withRetry(() => this.db.doc(`${this.base}/hsync`).set(body));
   }
 
   /**
@@ -300,14 +297,16 @@ export class CloudStore {
 export class MemoryStore {
   constructor() {
     this.kind = 'memory';
+    this.persistent = false;
+    this.where = null;
     this.state = null;
     this.trackStore = {};
     this.mapStore = {};
   }
 
   async load() {
-    if (!this.state) return { ds: emptyDataset(), meta: defaultMeta(), diag: null, syncIndex: null, basemapIndex: null };
-    return { syncIndex: null, basemapIndex: null, ...structuredClone(this.state) };
+    if (!this.state) return { ds: emptyDataset(), meta: defaultMeta(), diag: null, basemapIndex: null };
+    return { basemapIndex: null, ...structuredClone(this.state) };
   }
 
   async loadTrack(id) {
@@ -330,7 +329,7 @@ export class MemoryStore {
   }
 
   #base() {
-    return this.state || { ds: emptyDataset(), meta: defaultMeta(), diag: null, syncIndex: null, basemapIndex: null };
+    return this.state || { ds: emptyDataset(), meta: defaultMeta(), diag: null, basemapIndex: null };
   }
 
   async saveMeta(meta) {
@@ -339,10 +338,6 @@ export class MemoryStore {
 
   async saveDiag(diag) {
     this.state = { ...this.#base(), diag: structuredClone(diag) };
-  }
-
-  async saveSyncIndex(index) {
-    this.state = { ...this.#base(), syncIndex: structuredClone(index) };
   }
 
   async save(ds, meta, { tracks = {}, onProgress = () => {} } = {}) {

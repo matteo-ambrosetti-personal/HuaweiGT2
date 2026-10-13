@@ -268,110 +268,39 @@ for (const t of ['sleep', 'workouts', 'records', 'data']) {
 }
 await c2.close();
 
-// ---------------------------------------------------------------- Google Drive sync
-// A fake claude.ai runtime: no db (in-memory store), and a "Google Drive"
-// connector answering with the shapes observed on the real one. Synthetic files.
-function fakeRuntime({ perm, failCode }) {
-  const FOLDER = 'application/vnd.google-apps.folder';
-  const pad = (n) => String(n).padStart(2, '0');
-  const day = (back) => { const d = new Date(); d.setDate(d.getDate() - back); return `${d.getFullYear()}.${pad(d.getMonth() + 1)}.${pad(d.getDate())}`; };
-  const csv = (header, rows) => [header, ...rows.map(([d, t, v]) => `${d} ${t},${t},${v}`)].join('\n') + '\n';
-  const files = [
-    { id: 'wkSteps', parentId: 'fSteps', title: 'Passi weekly Huawei Health.csv', modifiedTime: '2026-01-01T10:00:00.000Z',
-      text: csv('Data,Orario,Passi', [[day(2), '20:00:00', 55], [day(1), '08:00:00', 120]]) },
-    { id: 'dSteps', parentId: 'fSteps', title: `Passi ${day(1)} Huawei Health.csv`, modifiedTime: '2026-01-01T10:01:00.000Z',
-      text: csv('Data,Orario,Passi', [[day(1), '08:00:00', 120], [day(1), '08:01:00', 110], [day(1), '12:30:00', 70]]) },
-    { id: 'dHr', parentId: 'fHr', title: `Freq. cardiaca ${day(1)} Huawei Health.csv`, modifiedTime: '2026-01-01T10:02:00.000Z',
-      text: csv('Data,Orario,Frequenza cardiaca,Origine', [[day(1), '10:00:00', '60,'], [day(1), '10:10:00', '70,']]) },
-    // Same day from another source: must not be added to the watch's steps.
-    { id: 'hcSteps', parentId: 'fSteps', title: `Passi ${day(1)} Health Connect.csv`, modifiedTime: '2026-01-01T10:03:00.000Z',
-      text: csv('Data,Orario,Passi', [[day(1), '10:22:47', 900]]) },
-  ];
-  const folders = [{ id: 'fSteps', title: 'Health Sync Passi' }, { id: 'fHr', title: 'Health Sync Freq. cardiaca' }];
-  const b64 = (s) => btoa(String.fromCharCode(...new TextEncoder().encode(s)));
-  window.__driveCalls = [];
-  const answer = (tool, input) => {
-    if (tool === 'search_files') {
-      if (input.query.startsWith("title contains 'Health Sync'")) return { files: folders.map((f) => ({ ...f, mimeType: FOLDER })) };
-      const parents = [...input.query.matchAll(/parentId = '([^']+)'/g)].map((m) => m[1]);
-      const after = /modifiedTime > '([^']+)'/.exec(input.query)?.[1];
-      const list = files.filter((f) => parents.includes(f.parentId) && (!after || Date.parse(f.modifiedTime) > Date.parse(after)));
-      return list.length ? { files: list.map(({ text, ...m }) => ({ ...m, mimeType: 'text/troff', fileExtension: 'csv', fileSize: String(text.length) })) } : {};
-    }
-    const f = files.find((x) => x.id === input.fileId);
-    return { content: b64(f.text), id: f.id, mimeType: 'text/troff', title: f.title };
-  };
+// ---------------------------------------------------------------- the ZIP is the only source
+// A claude.ai runtime that offers a Google Drive connector: the page must not
+// touch it. Data comes only from the Huawei export ZIP.
+function connectorRuntime() {
+  window.__connectorCalls = [];
   const mcp = {
-    async listTools() {
-      return { servers: [{ server: 'Google Drive', authStatus: perm === 'granted' ? 'connected' : 'unknown', tools: [{ name: 'search_files', description: '' }, { name: 'download_file_content', description: '' }] }] };
-    },
-    async callTool(server, tool, input) {
-      window.__driveCalls.push(tool);
-      if (server !== 'Google Drive') throw { code: 'not_in_manifest', message: 'not declared' };
-      if (failCode) throw { code: failCode, message: 'fake failure' };
-      const payload = answer(tool, input);
-      return { content: [{ type: 'text', text: JSON.stringify(payload) }], payload };
-    },
+    async listTools() { window.__connectorCalls.push('listTools'); return { servers: [{ server: 'Google Drive', authStatus: 'connected', tools: [{ name: 'search_files', description: '' }] }] }; },
+    async callTool(server, tool) { window.__connectorCalls.push(tool); return { content: [], payload: {} }; },
   };
-  const permissions = { async state() { return perm; }, async request() { return {}; }, async manage() {} };
+  const permissions = { async state() { window.__connectorCalls.push('permissions'); return 'granted'; }, async request() { return {}; }, async manage() {} };
   window.claude = { use: async (name) => (name === 'mcp' ? mcp : name === 'permissions' ? permissions : null) };
 }
 
-step('Drive: allowed connector syncs on open and merges overlapping files');
+step('the export ZIP is the only way in: no connectors, no other files');
 {
-  const { ctx: c3, page: p3 } = await newPage();
-  await c3.addInitScript(fakeRuntime, { perm: 'granted' });
-  await p3.goto(url);
-  await p3.waitForSelector('#status-chips .chip:has-text("Health Sync")', { timeout: 30000 });
-  assert.equal(await p3.$('.chip.sample'), null, 'Drive data replaces the sample data');
+  const { ctx: c3, page: p3 } = await newPage({ viewport: { width: 400, height: 860 } });
+  await c3.addInitScript(connectorRuntime);
   await p3.goto(url + '#data');
-  await p3.waitForSelector('#drive-summary');
-  const summary = await p3.textContent('#drive-summary');
-  assert.match(summary, /2 days updated \(steps, heart rate\)/, summary);
-  assert.match(await p3.textContent('#drive-status'), /Connected/);
-  await p3.screenshot({ path: `${SHOTS}/30-drive-synced.png`, fullPage: true });
-  const before = await p3.evaluate(() => window.__driveCalls.length);
-  await p3.click('#drive-sync');
-  await p3.waitForSelector('.toast:has-text("up to date")', { timeout: 15000 });
-  const again = await p3.evaluate((n) => window.__driveCalls.slice(n), before);
-  assert.ok(!again.includes('download_file_content'), `nothing new is downloaded (${again.join(', ')})`);
-  for (const t of ['activity', 'heart']) {
-    await p3.goto(url + '#' + t);
-    await p3.waitForTimeout(500);
-    assert.equal(await p3.$('.msg.err'), null, `${t} renders with Drive data`);
+  await p3.waitForSelector('#zip-file', { state: 'attached', timeout: 30000 });
+  await p3.waitForTimeout(800);
+  assert.deepEqual(await p3.evaluate(() => window.__connectorCalls), [], 'no connector is asked for data');
+  const inputs = await p3.$$eval('input[type=file]', (els) => els.map((e) => [e.id, e.accept, e.multiple]));
+  assert.deepEqual(inputs.filter(([id]) => id !== 'map-file'), [['zip-file', '.zip,application/zip', false]]);
+  for (const gone of ['#drive-sync', '#health-card', '#intervals-key', '#backup-restore', '#activity-files']) {
+    assert.equal(await p3.$(gone), null, `${gone} is gone`);
   }
+  // A dropped file that is not a ZIP is turned away.
+  await p3.setInputFiles('#zip-file', { name: 'run.gpx', mimeType: 'application/gpx+xml', buffer: Buffer.from('<gpx/>') });
+  await p3.waitForSelector('#dropzone:has-text("not a ZIP file")', { timeout: 10000 });
+  assert.equal(await p3.getByRole('button', { name: 'Import', exact: true }).isDisabled(), true);
+  assert.ok(await p3.$('.chip.sample'), 'the sample data stays');
+  await p3.screenshot({ path: `${SHOTS}/30-data-zip-only-phone.png`, fullPage: true });
   await c3.close();
-}
-
-step('Drive: first sync waits for the button');
-{
-  const { ctx: c4, page: p4 } = await newPage({ viewport: { width: 400, height: 860 } });
-  await c4.addInitScript(fakeRuntime, { perm: 'prompt' });
-  await p4.goto(url + '#data');
-  await p4.waitForSelector('#drive-sync:has-text("Connect and sync")', { timeout: 30000 });
-  assert.ok(await p4.$('.chip.sample'), 'no automatic sync before consent');
-  assert.equal(await p4.evaluate(() => window.__driveCalls.length), 0);
-  await p4.screenshot({ path: `${SHOTS}/31-drive-prompt-phone.png`, fullPage: true });
-  await p4.click('#drive-sync');
-  await p4.waitForSelector('#drive-summary', { timeout: 15000 });
-  assert.match(await p4.textContent('#drive-summary'), /2 days updated/);
-  assert.equal(await p4.$('.chip.sample'), null);
-  const ov = await p4.evaluate(() => document.documentElement.scrollWidth - window.innerWidth);
-  assert.ok(ov <= 1, `data tab: no horizontal page scroll (overflow ${ov}px)`);
-  await c4.close();
-}
-
-step('Drive: lapsed connector shows how to fix it');
-{
-  const { ctx: c5, page: p5 } = await newPage();
-  await c5.addInitScript(fakeRuntime, { perm: 'granted', failCode: 'needs_reauth' });
-  await p5.goto(url + '#data');
-  await p5.waitForSelector('#drive-error', { timeout: 30000 });
-  assert.match(await p5.textContent('#drive-error'), /Reconnect Google Drive/);
-  assert.match(await p5.textContent('#drive-status'), /Reconnect/);
-  assert.ok(await p5.$('.chip.sample'), 'sample data stays when the sync fails');
-  await p5.screenshot({ path: `${SHOTS}/32-drive-reauth.png`, fullPage: true });
-  await c5.close();
 }
 
 await browser.close();

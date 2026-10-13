@@ -1,13 +1,11 @@
 // Parser worker: receives decompressed file chunks, streams them through the
 // JSON element splitter and the Huawei accumulators, and returns a dataset
-// fragment. Also builds the sample dataset and parses GPX/TCX/CSV files.
+// fragment. Also builds the sample dataset and converts map downloads.
 
 import { JsonArrayStream, parseLenient, parseArrayText } from '../lib/json-stream.js';
 import { createHuaweiImporter } from '../lib/huawei/index.js';
 import { classifyEntry } from '../lib/huawei/entries.js';
 import { generateExport } from '../lib/sample/generate.js';
-import { parseActivityFile, parseDailyCsv, parseSampleCsv, samplesFragment, sourceFromTitle } from '../lib/healthsync.js';
-import { emptyDataset, mergeDataset } from '../lib/model.js';
 import { osmToBasemap, parseMapText } from '../lib/basemap.js';
 
 let imp = null;
@@ -84,50 +82,6 @@ self.onmessage = (e) => {
         }
         const { dataset, diag } = s.finish();
         self.postMessage({ type: 'done', dataset, diag, sample: true });
-        break;
-      }
-      case 'activity-files': {
-        // [{name, text, id}] GPX/TCX/CSV → fragment for `source`
-        const frag = emptyDataset();
-        const out = emptyDataset();
-        const report = { parsed: 0, skipped: [] };
-        const samples = []; // per-minute Health Sync CSVs, unioned below
-        for (const [i, file] of m.files.entries()) {
-          const lower = file.name.toLowerCase();
-          if (lower.endsWith('.csv')) {
-            const s = parseSampleCsv(file.text);
-            if (s.metric) {
-              if (!s.rows.length) report.skipped.push({ name: file.name, reason: 'no rows' });
-              else {
-                samples.push({ metric: s.metric, rows: s.rows, m: i, source: sourceFromTitle(file.name) });
-                report.parsed++;
-              }
-              continue;
-            }
-            const { days, nights, columns } = parseDailyCsv(file.text);
-            if (!Object.keys(days).length && !Object.keys(nights).length) {
-              report.skipped.push({ name: file.name, reason: 'no recognised columns', columns: Object.keys(columns) });
-              continue;
-            }
-            Object.assign(frag.days, days);
-            Object.assign(frag.nights, nights);
-            report.parsed++;
-            continue;
-          }
-          const res = parseActivityFile(file.name, file.text, file.id);
-          if (!res) {
-            report.skipped.push({ name: file.name, reason: 'not a GPX/TCX activity' });
-            continue;
-          }
-          res.workout.source = m.source;
-          res.workout.sources = [m.source];
-          frag.workouts[res.workout.id] = res.workout;
-          if (res.track) frag.tracks[res.workout.id] = res.track;
-          report.parsed++;
-        }
-        for (const [date, row] of Object.entries(samplesFragment(samples))) Object.assign((frag.days[date] ||= {}), row);
-        mergeDataset(out, frag, m.source);
-        self.postMessage({ type: 'done', dataset: out, diag: report });
         break;
       }
       case 'basemap': {

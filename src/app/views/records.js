@@ -5,6 +5,8 @@ import { personalRecords, yearSummary, cumulativeByYear, streaks, stepBests, run
 import { fmtDuration, fmtDate, fmtInt, fmtKm, fmtSleep, fmtPace, fmtHoursMinutes } from '../../lib/format.js';
 import { BUCKET_LABELS } from '../../lib/huawei/sport-types.js';
 import { workoutTitle } from './common.js';
+import { analyze } from '../../lib/models/insights.js';
+import { raceTime } from '../../lib/models/running.js';
 
 export function renderRecords(root, ctx) {
   const { ds, settings } = ctx;
@@ -52,7 +54,7 @@ export function renderRecords(root, ctx) {
     h('p', { class: 'chart-sub', text: 'Across your whole history' }),
     h('div', { class: 'table-wrap' }, h('table', null, h('thead', null, h('tr', null, h('th', { text: 'Record' }), h('th', { class: 'r', text: 'Value' }), h('th', { text: 'Where' }))), tb2)));
   root.append(section('Records', null, h('div', { class: 'grid' }, efforts, bests)));
-  const fitness = runningFitnessSection(runningFitness(ds));
+  const fitness = runningFitnessSection(runningFitness(ds), analyze(ds, settings).vdotNow);
   if (fitness) root.append(fitness);
 
   // year in review
@@ -104,7 +106,7 @@ export function renderRecords(root, ctx) {
 const parseDay = (k) => new Date(`${k}T00:00:00Z`);
 
 /** The watch's running estimates: latest race predictions, threshold, and 5/10 km over time. */
-function runningFitnessSection(fit) {
+function runningFitnessSection(fit, vdotNow) {
   if (!fit.latest && !fit.latestThreshold) return null;
   const grid = h('div', { class: 'grid' });
   const panel = h('div', { class: 'panel span-5', id: 'running-fitness' });
@@ -116,13 +118,15 @@ function runningFitnessSection(fit) {
       tb.append(h('tr', null,
         h('td', { text: d.label }),
         h('td', { class: 'r', style: { fontWeight: 600 }, text: fmtDuration(t) }),
-        h('td', { class: 'r', text: `${fmtPace(t / d.km)} /km` })));
+        h('td', { class: 'r', text: `${fmtPace(t / d.km)} /km` }),
+        h('td', { class: 'r muted', text: vdotNow ? fmtDuration(raceTime(vdotNow, d.km * 1000)) : '—' })));
     }
     panel.append(
       h('h3', { class: 'chart-title', text: 'Predicted race times' }),
       h('p', { class: 'chart-sub', text: `The watch's latest estimate, from ${fmtDate(fit.latest.date)}` }),
       h('div', { class: 'table-wrap' }, h('table', null,
-        h('thead', null, h('tr', null, h('th', { text: 'Race' }), h('th', { class: 'r', text: 'Time' }), h('th', { class: 'r', text: 'Pace' }))), tb)));
+        h('thead', null, h('tr', null, h('th', { text: 'Race' }), h('th', { class: 'r', text: 'Time' }), h('th', { class: 'r', text: 'Pace' }), h('th', { class: 'r', text: 'Your runs', title: 'Daniels VDOT equivalent of your best runs in 90 days' }))), tb)),
+      h('p', { class: 'chart-sub', style: { margin: '6px 0 0' }, text: vdotNow ? `"Your runs": the Daniels & Gilbert equivalent of your best runs of the last 90 days (VDOT ${vdotNow.toFixed(1)}).` : '"Your runs" fills in once you have runs of 3 km or more.' }));
   }
   const lt = fit.latestThreshold;
   if (lt) {
