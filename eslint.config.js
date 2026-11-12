@@ -5,14 +5,14 @@ const browser = {
   URL: 'readonly', Worker: 'readonly', WritableStream: 'readonly', TextDecoder: 'readonly', TextEncoder: 'readonly',
   AbortController: 'readonly', Node: 'readonly', setTimeout: 'readonly', clearTimeout: 'readonly', console: 'readonly',
   structuredClone: 'readonly', self: 'readonly', fetch: 'readonly', Response: 'readonly', crypto: 'readonly',
-  atob: 'readonly', btoa: 'readonly',
+  atob: 'readonly', btoa: 'readonly', indexedDB: 'readonly', DOMException: 'readonly', caches: 'readonly', Request: 'readonly',
 };
 const node = { process: 'readonly', console: 'readonly', Buffer: 'readonly', URL: 'readonly', setTimeout: 'readonly' };
 
 export default [
   {
     files: ['src/**/*.js'],
-    languageOptions: { ecmaVersion: 2024, sourceType: 'module', globals: { ...browser, d3: 'readonly', WORKER_SOURCE: 'readonly' } },
+    languageOptions: { ecmaVersion: 2024, sourceType: 'module', globals: { ...browser, d3: 'readonly', WORKER_SOURCE: 'readonly', BUILD_TARGET: 'readonly' } },
     rules: { 'no-undef': 'error', 'no-unused-vars': ['error', { args: 'none' }], 'no-unreachable': 'error', 'no-dupe-keys': 'error' },
   },
   {

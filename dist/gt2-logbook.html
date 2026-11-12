@@ -1047,7 +1047,7 @@ footer.foot { max-width: var(--maxw); margin: 0 auto; padding: 0 var(--gutter) 3
     };
   }
   function analyzeSeries(w, series, extra = {}) {
-    let gps = filterGps(series.gps, w.family), hr = series.hr.filter((s2) => s2.v >= 25 && s2.v <= 240).sort((a, b) => a.t - b.t), cad = series.cad.filter((s2) => s2.v > 0).sort((a, b) => a.t - b.t), alt = series.alt.filter((s2) => Number.isFinite(s2.v)).sort((a, b) => a.t - b.t), speed = series.speed.filter((s2) => s2.v >= 0).sort((a, b) => a.t - b.t), clean2 = { gps, hr, cad, alt, speed }, summary = {}, tl = timelines(gps), gpsDist = gps.length ? tl.dist[gps.length - 1] : 0, scale = 1;
+    let gps = filterGps(series.gps, w.family), hr = series.hr.filter((s2) => s2.v >= 25 && s2.v <= 240).sort((a, b) => a.t - b.t), cad = series.cad.filter((s2) => s2.v > 0).sort((a, b) => a.t - b.t), alt = series.alt.filter((s2) => Number.isFinite(s2.v)).sort((a, b) => a.t - b.t), speed = series.speed.filter((s2) => s2.v >= 0).sort((a, b) => a.t - b.t), clean3 = { gps, hr, cad, alt, speed }, summary = {}, tl = timelines(gps), gpsDist = gps.length ? tl.dist[gps.length - 1] : 0, scale = 1;
     if (w.distance > 0 && gpsDist > 0) {
       let r = w.distance / gpsDist;
       r > 0.8 && r < 1.25 && (scale = r);
@@ -1077,7 +1077,7 @@ footer.foot { max-width: var(--maxw); margin: 0 auto; padding: 0 var(--gutter) 3
         summary.ascent = Math.round(c.up), w.descent > 0 || (summary.descent = Math.round(c.down));
       }
     }
-    let track = gps.length || hr.length || alt.length || speed.length || cad.length ? downsample(clean2, w.start, w.end ?? w.start, tl, scale) : null;
+    let track = gps.length || hr.length || alt.length || speed.length || cad.length ? downsample(clean3, w.start, w.end ?? w.start, tl, scale) : null;
     return summary.hasTrack = !!track, summary.gpsPoints = gps.length, { summary, track };
   }
 
@@ -1474,7 +1474,7 @@ footer.foot { max-width: var(--maxw); margin: 0 auto; padding: 0 var(--gutter) 3
   }
   var CloudStore = class {
     constructor(db, uid) {
-      this.db = db, this.base = `data/users/${uid}`, this.kind = "cloud";
+      this.db = db, this.base = `data/users/${uid}`, this.kind = "cloud", this.persistent = !0;
     }
     async load() {
       let snap = await withRetry(() => this.db.collection(this.base).limit(1e3).get()), meta = defaultMeta(), diag = null, syncIndex = null, basemapIndex = null, parts = [];
@@ -1585,7 +1585,7 @@ footer.foot { max-width: var(--maxw); margin: 0 auto; padding: 0 var(--gutter) 3
   }, _MemoryStore_instances, base_fn, MemoryStore = class {
     constructor() {
       __privateAdd(this, _MemoryStore_instances);
-      this.kind = "memory", this.state = null, this.trackStore = {}, this.mapStore = {};
+      this.kind = "memory", this.persistent = !1, this.state = null, this.trackStore = {}, this.mapStore = {};
     }
     async load() {
       return this.state ? { syncIndex: null, basemapIndex: null, ...structuredClone(this.state) } : { ds: emptyDataset(), meta: defaultMeta(), diag: null, syncIndex: null, basemapIndex: null };
@@ -1679,6 +1679,55 @@ footer.foot { max-width: var(--maxw); margin: 0 auto; padding: 0 var(--gutter) 3
     }
   }
 
+  // src/app/platform.js
+  function nativeBridge() {
+    try {
+      let n = typeof window < "u" ? window.GT2Native : null;
+      return n && typeof n.begin == "function" ? n : null;
+    } catch {
+      return null;
+    }
+  }
+  function storageWords(store) {
+    return store?.kind === "cloud" ? { saved: "Saved to your private storage.", saving: "Saving to your private storage in the background.", where: "Private claude.ai storage (only you can read it)" } : store?.kind === "local" ? { saved: "Saved on this device.", saving: "Saving on this device in the background.", where: nativeBridge() ? "This app, on this phone only" : "This browser, on this device only" } : { saved: null, saving: null, where: "This browser tab only (not saved)" };
+  }
+
+  // src/app/downloads.js
+  var MIME = { csv: "text/csv", json: "application/json", zip: "application/zip", gpx: "application/gpx+xml", tcx: "application/vnd.garmin.tcx+xml" }, mimeFor = (name) => MIME[String(name).split(".").pop().toLowerCase()] || "application/octet-stream", CHUNK = 3 * 262144;
+  function toBase64(bytes) {
+    let bin = "";
+    for (let i = 0; i < bytes.length; i += 32768) bin += String.fromCharCode.apply(null, bytes.subarray(i, i + 32768));
+    return btoa(bin);
+  }
+  async function toBytes(data) {
+    return data instanceof Uint8Array ? data : data instanceof ArrayBuffer ? new Uint8Array(data) : typeof Blob < "u" && data instanceof Blob ? new Uint8Array(await data.arrayBuffer()) : new TextEncoder().encode(String(data));
+  }
+  var pending = /* @__PURE__ */ new Map(), seq = 0;
+  function onNativeSaved(id, result) {
+    let p = pending.get(id);
+    p && (pending.delete(id), result === "ok" ? p.resolve() : p.reject(Object.assign(new Error(`Save ${result}`), { code: result === "cancelled" ? "declined" : "native_error" })));
+  }
+  async function saveNative(bridge, { filename, data }) {
+    let bytes = await toBytes(data), id = `s${Date.now().toString(36)}${(++seq).toString(36)}`;
+    typeof window < "u" && (window.GT2NativeSaved = onNativeSaved);
+    let done = new Promise((resolve, reject) => pending.set(id, { resolve, reject }));
+    bridge.begin(id, filename, mimeFor(filename));
+    for (let i = 0; i < bytes.length; i += CHUNK) bridge.append(id, toBase64(bytes.subarray(i, i + CHUNK)));
+    return bridge.finish(id), done;
+  }
+  function saveBrowser({ filename, data }) {
+    let blob = typeof Blob < "u" && data instanceof Blob ? data : new Blob([data], { type: mimeFor(filename) }), url = URL.createObjectURL(blob), a = document.createElement("a");
+    return a.href = url, a.download = filename, a.rel = "noopener", a.hidden = !0, document.body.append(a), a.click(), a.remove(), setTimeout(() => URL.revokeObjectURL(url), 6e4), Promise.resolve();
+  }
+  function standaloneDownloads() {
+    return {
+      save(file) {
+        let bridge = nativeBridge();
+        return bridge ? saveNative(bridge, file) : saveBrowser(file);
+      }
+    };
+  }
+
   // src/app/runtime.js
   async function useCap(name) {
     try {
@@ -1688,6 +1737,8 @@ footer.foot { max-width: var(--maxw); margin: 0 auto; padding: 0 var(--gutter) 3
     }
   }
   async function getRuntime() {
+    if (!1)
+      return { db: null, user: null, uid: null, downloads: standaloneDownloads(), sample: null, mcp: null, permissions: null, inViewer: !1, standalone: !0 };
     let names = ["db", "user", "downloads", "sample", "mcp", "permissions"], [db, user, downloads, sample, mcp, permissions] = await Promise.all(names.map(useCap)), uid = null;
     if (user)
       try {
@@ -1696,6 +1747,169 @@ footer.foot { max-width: var(--maxw); margin: 0 auto; padding: 0 var(--gutter) 3
         uid = null;
       }
     return { db, user, uid, downloads, sample, mcp, permissions, inViewer: !!window.claude };
+  }
+
+  // src/app/local-store.js
+  var DB_NAME = "gt2-logbook", BATCH = 40, reqP = (r) => new Promise((resolve, reject) => {
+    r.onsuccess = () => resolve(r.result), r.onerror = () => reject(r.error);
+  }), txDone = (tx) => new Promise((resolve, reject) => {
+    tx.oncomplete = () => resolve(), tx.onerror = () => reject(tx.error), tx.onabort = () => reject(tx.error || new DOMException("Transaction aborted", "AbortError"));
+  });
+  function coded(e) {
+    if (e?.code && typeof e.code == "string") return e;
+    let name = e?.name || "", code = name === "QuotaExceededError" ? "quota_exceeded" : name === "DataCloneError" ? "invalid_argument" : "unavailable";
+    return Object.assign(new Error(e?.message || name || "Storage error"), { code, cause: e });
+  }
+  async function idbKv(name = DB_NAME) {
+    if (typeof indexedDB > "u") throw Object.assign(new Error("IndexedDB is not available"), { code: "unavailable" });
+    let db = await new Promise((resolve, reject) => {
+      let r = indexedDB.open(name, 1);
+      r.onupgradeneeded = () => {
+        for (let s2 of ["docs", "items"]) r.result.objectStoreNames.contains(s2) || r.result.createObjectStore(s2);
+      }, r.onsuccess = () => resolve(r.result), r.onerror = () => reject(r.error), r.onblocked = () => reject(Object.assign(new Error("Storage is busy in another tab"), { code: "unavailable" }));
+    }).catch((e) => {
+      throw coded(e);
+    });
+    return db.onversionchange = () => db.close(), {
+      async all(store) {
+        try {
+          let os = db.transaction(store, "readonly").objectStore(store), [keys, values] = await Promise.all([reqP(os.getAllKeys()), reqP(os.getAll())]);
+          return keys.map((k, i) => [k, values[i]]);
+        } catch (e) {
+          throw coded(e);
+        }
+      },
+      async get(store, key) {
+        try {
+          let v = await reqP(db.transaction(store, "readonly").objectStore(store).get(key));
+          return v === void 0 ? null : v;
+        } catch (e) {
+          throw coded(e);
+        }
+      },
+      /** ops: [{store, key, value}] puts and [{store, key, del: true}] deletes, in one transaction. */
+      async write(ops) {
+        if (ops.length)
+          try {
+            let stores = [...new Set(ops.map((o) => o.store))], tx = db.transaction(stores, "readwrite");
+            for (let o of ops) {
+              let os = tx.objectStore(o.store);
+              o.del ? os.delete(o.key) : os.put(o.value, o.key);
+            }
+            await txDone(tx);
+          } catch (e) {
+            throw coded(e);
+          }
+      },
+      async clear() {
+        try {
+          let tx = db.transaction(["docs", "items"], "readwrite");
+          tx.objectStore("docs").clear(), tx.objectStore("items").clear(), await txDone(tx);
+        } catch (e) {
+          throw coded(e);
+        }
+      }
+    };
+  }
+  var clean2 = (body) => JSON.parse(JSON.stringify(body)), LocalStore = class {
+    constructor(kv) {
+      this.kv = kv, this.kind = "local", this.persistent = !0;
+    }
+    async load() {
+      let rows = await this.kv.all("docs"), meta = defaultMeta(), diag = null, syncIndex = null, basemapIndex = null, parts = [];
+      for (let [id, data] of rows)
+        data && (id === "meta" ? meta = { ...defaultMeta(), ...data } : id === "diag" ? diag = data : id === "hsync" ? syncIndex = data : id === "basemap" ? basemapIndex = data : parts.push(data));
+      return { ds: docsToDataset(parts), meta, diag, syncIndex, basemapIndex };
+    }
+    loadTrack(id) {
+      return this.kv.get("items", `t:${id}`);
+    }
+    loadBasemapItem(id) {
+      return this.kv.get("items", `m:${id}`);
+    }
+    /** Store a map: its chunks, the index that lists them and the removal of replaced chunks, together. */
+    async saveBasemap(index, items = {}, removed = []) {
+      await this.kv.write([
+        ...Object.entries(items).map(([id, body]) => ({ store: "items", key: `m:${id}`, value: clean2(body) })),
+        ...removed.map((id) => ({ store: "items", key: `m:${id}`, del: !0 })),
+        { store: "docs", key: "basemap", value: clean2(index) }
+      ]);
+    }
+    async removeBasemap(index) {
+      let ids = (index?.areas || []).flatMap((a) => a.items || []);
+      await this.kv.write([
+        { store: "docs", key: "basemap", del: !0 },
+        ...ids.map((id) => ({ store: "items", key: `m:${id}`, del: !0 }))
+      ]);
+    }
+    async saveMeta(meta) {
+      meta.updatedAt = (/* @__PURE__ */ new Date()).toISOString(), await this.kv.write([{ store: "docs", key: "meta", value: clean2(meta) }]);
+    }
+    async saveDiag(diag) {
+      await this.kv.write([{ store: "docs", key: "diag", value: clean2(diag) }]);
+    }
+    async saveSyncIndex(index) {
+      await this.kv.write([{ store: "docs", key: "hsync", value: clean2(index) }]);
+    }
+    /**
+     * Write changed month documents and removals first (they are what the
+     * charts are drawn from), then tracks not yet stored, then meta.
+     * @returns {{written: number, tracksWritten: number, tracksSkipped: boolean, error: object|null}}
+     */
+    async save(ds, meta, { tracks = {}, onProgress = () => {
+    } } = {}) {
+      meta.hashes || (meta.hashes = {}), meta.tracks || (meta.tracks = {});
+      let docs = datasetToDocs(ds), changed = [], nextHashes = {};
+      for (let [id, body] of docs) {
+        let h2 = hashString(JSON.stringify(body));
+        nextHashes[id] = h2, meta.hashes[id] !== h2 && changed.push([id, body]);
+      }
+      let removed = Object.keys(meta.hashes).filter((id) => !docs.has(id)), pendingTracks = Object.entries(tracks).filter(([id, t]) => t && !meta.tracks[id]), total = changed.length + removed.length + pendingTracks.length, done = 0, error = null, docOps = [
+        ...changed.map(([id, body]) => ({ store: "docs", key: id, value: clean2(body), apply: () => {
+          meta.hashes[id] = nextHashes[id];
+        } })),
+        ...removed.map((id) => ({ store: "docs", key: id, del: !0, apply: () => {
+          delete meta.hashes[id];
+        } }))
+      ];
+      for (let i = 0; i < docOps.length && !error; i += BATCH) {
+        let batch = docOps.slice(i, i + BATCH);
+        try {
+          await this.kv.write(batch);
+          for (let o of batch) o.apply();
+          done += batch.length, onProgress({ done, total });
+        } catch (e) {
+          error = coded(e);
+        }
+      }
+      let tracksWritten = 0, tracksSkipped = !1;
+      if (!error)
+        for (let i = 0; i < pendingTracks.length; i += BATCH) {
+          let batch = pendingTracks.slice(i, i + BATCH);
+          try {
+            await this.kv.write(batch.map(([id, t]) => ({ store: "items", key: `t:${id}`, value: clean2(t) })));
+            for (let [id] of batch) meta.tracks[id] = 1;
+            tracksWritten += batch.length, done += batch.length, onProgress({ done, total });
+          } catch (e) {
+            error = coded(e), tracksSkipped = !0;
+            break;
+          }
+        }
+      return await this.saveMeta(meta).catch(() => {
+      }), { written: changed.length, tracksWritten, tracksSkipped, error };
+    }
+    /** Delete everything this copy of the logbook stored on the device. */
+    async clear(_meta, onProgress = () => {
+    }) {
+      await this.kv.clear(), onProgress({ done: 1, total: 1 });
+    }
+  };
+  async function requestPersistence() {
+    try {
+      return navigator.storage?.persist ? await navigator.storage.persisted() ? !0 : await navigator.storage.persist() : null;
+    } catch {
+      return null;
+    }
   }
 
   // src/lib/huawei/entries.js
@@ -4727,7 +4941,7 @@ Last 90 days: ${JSON.stringify(last90).slice(0, 6e3)}`;
     let privacy = h("p", {
       class: "muted",
       style: { margin: 0, fontSize: "12px" },
-      text: `Map data ${MAP_ATTRIBUTION}. OpenStreetMap's server sees which area you download, never your tracks. The map is saved in your private storage, next to your health data.`
+      text: `Map data ${MAP_ATTRIBUTION}. OpenStreetMap's server sees which area you download, never your tracks. The map is saved ${ctx.standalone ? "on this device" : "in your private storage"}, next to your health data.`
     });
     if (ctx.isSample || !gps.length)
       return panel.append(h("p", { class: "muted", style: { margin: 0 }, text: ctx.isSample ? "Import your own workouts first: the map is downloaded for the area around them." : "None of your workouts has a GPS route yet." }), result, privacy), panel;
@@ -4740,7 +4954,7 @@ Last 90 days: ${JSON.stringify(last90).slice(0, 6e3)}`;
           "div",
           { class: "msg err", id: "map-error" },
           h("strong", { text: "The map was not added" }),
-          e?.code && !/^(not_json|not_osm|server_page|server_error|empty)$/.test(e.code) ? `It could not be saved (${e.code}). Try again.` : e?.message || String(e)
+          e?.code && !/^(not_json|not_osm|server_page|server_error|empty|offline)$/.test(e.code) ? `It could not be saved (${e.code}). Try again.` : e?.message || String(e)
         )), add.disabled = !1;
       }
     };
@@ -4749,15 +4963,45 @@ Last 90 days: ${JSON.stringify(last90).slice(0, 6e3)}`;
     }), panel.addEventListener("dragover", (e) => e.preventDefault()), panel.addEventListener("drop", (e) => {
       e.preventDefault(), e.dataTransfer?.files?.[0] && take(e.dataTransfer.files[0]);
     });
-    let link = (d, label, primary) => h("a", {
-      class: `btn${primary ? " primary" : ""}`,
+    let link = (d, label, primary, plain) => h("a", {
+      class: plain ? "" : `btn${primary ? " primary" : ""}`,
       id: "map-download",
       href: d.url,
       target: "_blank",
       rel: "noopener",
       onclick: () => ctx.actions.noteMapRequest(d.areas)
-    }, label), dl = ctx.actions.mapDownload();
-    if (dl) {
+    }, label), fetchBtn = (d, label, primary) => {
+      let b = h("button", { class: `btn${primary ? " primary" : ""}`, type: "button", id: "map-fetch" }, label);
+      return b.addEventListener("click", async () => {
+        clear(result), b.disabled = !0, add.disabled = !0, result.append(h("p", { class: "muted", style: { margin: 0 }, id: "map-progress", text: `Downloading about ${fmtInt(d.km2)} km\xB2 from OpenStreetMap${d.km2 > 250 ? ". This is a big area, so it can take a few minutes" : "; a large area can take a minute"}\u2026` }));
+        try {
+          await ctx.actions.fetchMap(d);
+        } catch (e) {
+          clear(result), result.append(h(
+            "div",
+            { class: "msg err", id: "map-error" },
+            h("strong", { text: "The map was not added" }),
+            e?.code && !/^(not_json|not_osm|server_page|server_error|empty|offline)$/.test(e.code) ? `It could not be saved (${e.code}). Try again.` : e?.message || String(e)
+          )), b.disabled = !1, add.disabled = !1;
+        }
+      }), b;
+    }, dl = ctx.actions.mapDownload();
+    if (dl && ctx.standalone) {
+      let missing = gps.length - covered;
+      panel.append(h(
+        "div",
+        { class: "btn-row" },
+        fetchBtn(dl, "Download map", !0),
+        h("span", { class: "muted", text: `About ${fmtInt(dl.km2)} km\xB2 around ${areas.length ? `the ${plural(missing, "route")} outside the map` : "your routes"}${dl.leftOut ? `, leaving out ${plural(dl.leftOut, "long route")} that would make it too big` : ""}.${dl.more ? ` Then download again for the other ${plural(dl.more, "area")}.` : ""}` })
+      )), panel.append(h(
+        "p",
+        { class: "muted", style: { margin: 0, fontSize: "12px" } },
+        "If it fails here, ",
+        link(dl, "download the file yourself \u2197", !1, !0),
+        ", save it, then ",
+        add
+      ));
+    } else if (dl) {
       let missing = gps.length - covered;
       panel.append(h(
         "ol",
@@ -4778,7 +5022,7 @@ Last 90 days: ${JSON.stringify(last90).slice(0, 6e3)}`;
         "div",
         { class: "btn-row" },
         add,
-        again ? link(again, "Download again \u2197", !1) : null,
+        again ? ctx.standalone ? fetchBtn(again, "Download again", !1) : link(again, "Download again \u2197", !1) : null,
         h("span", { class: "muted", text: "All your routes are on the map." })
       ));
     }
@@ -4869,17 +5113,19 @@ Last 90 days: ${JSON.stringify(last90).slice(0, 6e3)}`;
     let { meta, isSample: isSample2, runtime, store } = ctx, pwd = h("input", { id: "zip-password", type: "password", autocomplete: "off", placeholder: "Password you chose when requesting it" }), fileInput = h("input", { id: "zip-file", type: "file", accept: ".zip,application/zip,.json", multiple: !0, hidden: !0 }), folderInput = h("input", { id: "zip-folder", type: "file", webkitdirectory: !0, multiple: !0, hidden: !0 }), progress = h("div", { class: "progress", hidden: !0 }, h("div")), result = h("div"), chosen = h("p", { class: "muted", text: "No file chosen" }), files = [], pick = (list) => {
       files = [...list], chosen.textContent = files.length === 1 ? `${files[0].name} \xB7 ${(files[0].size / 1e6).toFixed(1)} MB` : `${files.length} files selected`, go.disabled = !files.length;
     };
-    fileInput.addEventListener("change", () => pick(fileInput.files)), folderInput.addEventListener("change", () => pick(folderInput.files));
+    fileInput.addEventListener("change", () => pick(fileInput.files));
+    let folderBtn = ctx.native ? null : h("button", { class: "btn", type: "button", onclick: () => folderInput.click() }, "Choose folder");
+    folderInput.addEventListener("change", () => pick(folderInput.files));
     let go = h("button", { class: "btn primary", type: "button", disabled: !0 }, "Import"), drop = h(
       "div",
       { class: "dropzone", id: "dropzone" },
       h("p", null, h("b", { text: "Drop your Huawei export ZIP here" })),
-      h("p", { class: "muted", text: "Or choose the extracted folder. Everything is decrypted and read in your browser." }),
+      h("p", { class: "muted", text: ctx.native ? "Everything is decrypted and read on this phone." : "Or choose the extracted folder. Everything is decrypted and read in your browser." }),
       h(
         "div",
         { class: "btn-row", style: { justifyContent: "center" } },
         h("button", { class: "btn", type: "button", onclick: () => fileInput.click() }, "Choose ZIP"),
-        h("button", { class: "btn", type: "button", onclick: () => folderInput.click() }, "Choose folder")
+        folderBtn
       ),
       chosen,
       fileInput,
@@ -4929,7 +5175,7 @@ Last 90 days: ${JSON.stringify(last90).slice(0, 6e3)}`;
     let filesPanel = h(
       "div",
       { class: "panel", style: { display: "flex", flexDirection: "column", gap: "10px" } },
-      h("p", { style: { margin: 0 }, text: "Add single workouts between exports: in Huawei Health open a workout, tap the route or share icon and export GPX. Health Sync CSV, GPX and TCX files work too." }),
+      h("p", { style: { margin: 0 }, text: ctx.standalone ? "Add single workouts between exports: in Huawei Health open a workout, tap the route or share icon and export GPX. Health Sync CSV, GPX and TCX files work too: download them from the Health Sync folders in your Google Drive and add them here." : "Add single workouts between exports: in Huawei Health open a workout, tap the route or share icon and export GPX. Health Sync CSV, GPX and TCX files work too." }),
       h("div", { class: "btn-row" }, h("button", { class: "btn", type: "button", onclick: () => actInput.click() }, "Add GPX / TCX / CSV files"), actInput),
       actResult
     ), flash = ctx.takeFlash?.();
@@ -4950,7 +5196,12 @@ Last 90 days: ${JSON.stringify(last90).slice(0, 6e3)}`;
         ["In claude.ai add a custom connector named ", h("b", { text: "GT2 Bridge" }), " with the worker URL, then tell Claude it is done."]
       ])
     ]);
-    root.append(section("Automatic updates", "Optional. Keep the export for full history; these fill in new days between exports.", h("div", { class: "grid" }, drive, bridge)));
+    ctx.standalone ? root.append(section("Automatic updates", null, h(
+      "div",
+      { class: "panel", id: "auto-note", style: { display: "flex", flexDirection: "column", gap: "10px" } },
+      h("p", { style: { margin: 0 }, text: "Automatic syncing from Google Drive (Health Sync) and intervals.icu goes through claude.ai's connectors, so it is only in the claude.ai version of the logbook." }),
+      h("p", { class: "muted", style: { margin: 0 }, text: "Here, refresh your full history with a new Huawei export, and fill the days in between with Health Sync files under Add individual files." })
+    ))) : root.append(section("Automatic updates", "Optional. Keep the export for full history; these fill in new days between exports.", h("div", { class: "grid" }, drive, bridge)));
     let imports = (meta.imports || []).slice().reverse(), cov = datasetRange(ctx.ds), hist = h(
       "div",
       { class: "panel" },
@@ -4958,7 +5209,7 @@ Last 90 days: ${JSON.stringify(last90).slice(0, 6e3)}`;
         "dl",
         { class: "kv" },
         h("dt", { text: "Storage" }),
-        h("dd", { text: store?.kind === "cloud" ? "Private claude.ai storage (only you can read it)" : "This browser tab only (not saved)" }),
+        h("dd", { text: storageWords(store).where }),
         h("dt", { text: "Showing" }),
         h("dd", { text: isSample2 ? "Sample data" : cov ? `${fmtDate(cov.from)} \u2013 ${fmtDate(cov.to)}` : "Nothing yet" }),
         h("dt", { text: "Contents" }),
@@ -4984,7 +5235,7 @@ Last 90 days: ${JSON.stringify(last90).slice(0, 6e3)}`;
     let ex = h(
       "div",
       { class: "panel", style: { display: "flex", flexDirection: "column", gap: "10px" } },
-      h("p", { style: { margin: 0 }, text: "Your browser asks before saving each file. GPX and TCX files come zipped; tracks are simplified to at most 1,000 points." }),
+      h("p", { style: { margin: 0 }, text: `${ctx.native ? "The app asks where to save each file." : "Your browser asks before saving each file."} GPX and TCX files come zipped; tracks are simplified to at most 1,000 points.` }),
       h(
         "div",
         { class: "btn-row" },
@@ -5028,7 +5279,7 @@ Last 90 days: ${JSON.stringify(last90).slice(0, 6e3)}`;
     );
     root.append(section("Settings", null, form));
     let diag = ctx.diag, diagPanel = h("div", { class: "panel", style: { display: "flex", flexDirection: "column", gap: "8px" } });
-    if (!diag || isSample2) diagPanel.append(h("p", { class: "muted", style: { margin: 0 }, text: "After an import, a format report (file names, record types and counts, never your values) appears here and is saved so Claude can fix anything your watch exports differently." }));
+    if (!diag || isSample2) diagPanel.append(h("p", { class: "muted", style: { margin: 0 }, text: ctx.standalone ? "After an import, a format report (file names, record types and counts, never your values) appears here, to spot anything your watch exports differently." : "After an import, a format report (file names, record types and counts, never your values) appears here and is saved so Claude can fix anything your watch exports differently." }));
     else {
       let types = Object.entries(diag.health?.types || {}).sort((a, b) => b[1] - a[1]).slice(0, 14).map(([t, n]) => `${t}\xD7${n}`).join(", "), unknown = Object.keys(diag.health?.unknownKeys || {}).slice(0, 14).join(", ");
       diagPanel.append(h(
@@ -5052,7 +5303,7 @@ Last 90 days: ${JSON.stringify(last90).slice(0, 6e3)}`;
     let del = h("div", { class: "panel", style: { display: "flex", flexDirection: "column", gap: "10px" } }), step1 = h("button", { class: "btn danger", type: "button", disabled: isSample2 || !runtime }, "Delete all my data\u2026"), confirmRow = h(
       "div",
       { class: "btn-row", hidden: !0 },
-      h("span", { text: "This removes every imported day, workout, track and setting from this artifact. It cannot be undone." }),
+      h("span", { text: `This removes every imported day, workout, track and setting from ${ctx.native ? "this app" : ctx.standalone ? "this browser" : "this artifact"}. It cannot be undone.` }),
       h("button", { class: "btn danger", type: "button", onclick: async (e) => {
         e.target.disabled = !0, await ctx.actions.deleteAll();
       } }, "Yes, delete everything"),
@@ -5076,7 +5327,9 @@ Last 90 days: ${JSON.stringify(last90).slice(0, 6e3)}`;
     records: renderRecords,
     ask: renderAsk,
     data: renderData
-  }, FILTERED = /* @__PURE__ */ new Set(["overview", "activity", "workouts", "sleep", "heart"]), $ = (id) => document.getElementById(id);
+  };
+  !1;
+  var FILTERED = /* @__PURE__ */ new Set(["overview", "activity", "workouts", "sleep", "heart"]), $ = (id) => document.getElementById(id);
   function parseHash() {
     let raw = decodeURIComponent((location.hash || "").replace(/^#/, ""));
     return raw.startsWith("workout-") ? { route: "workout", param: raw.slice(8) } : { route: VIEWS[raw] ? raw : "overview", param: null };
@@ -5110,7 +5363,7 @@ Last 90 days: ${JSON.stringify(last90).slice(0, 6e3)}`;
       meta.imports = [...meta.imports || [], { at: (/* @__PURE__ */ new Date()).toISOString(), source: "export", counts: res.diag.counts, range }].slice(-20), meta.sources = { ...meta.sources || {}, export: { at: (/* @__PURE__ */ new Date()).toISOString(), range } }, base.tracks = {};
       let trackCache = state.isSample ? {} : state.tracks;
       Object.assign(trackCache, tracks);
-      let c = res.diag.counts, summary = `Read ${c.workouts} workouts, ${c.days} days and ${c.nights} nights${range?.from ? ` from ${fmtDate(range.from)} to ${fmtDate(range.to)}` : ""}.${res.diag.parseErrors ? ` ${res.diag.parseErrors} unreadable records were skipped.` : ""} ${state.store.kind === "cloud" ? "Saving to your private storage in the background." : "This view cannot save, so the data lasts until you close the page."}`;
+      let c = res.diag.counts, summary = `Read ${c.workouts} workouts, ${c.days} days and ${c.nights} nights${range?.from ? ` from ${fmtDate(range.from)} to ${fmtDate(range.to)}` : ""}.${res.diag.parseErrors ? ` ${res.diag.parseErrors} unreadable records were skipped.` : ""} ${storageWords(state.store).saving || "This view cannot save, so the data lasts until you close the page."}`;
       return update({ ds: base, meta, isSample: !1, tracks: trackCache, diag: { ...res.diag, at: (/* @__PURE__ */ new Date()).toISOString() }, flash: { title: "Import complete", text: summary } }), render(), persist(tracks, res.diag), summary;
     },
     async importActivityFiles(fileList) {
@@ -5241,13 +5494,32 @@ Last 90 days: ${JSON.stringify(last90).slice(0, 6e3)}`;
         bytes: res.chunks.reduce((n, c2) => n + JSON.stringify(c2).length, 0)
       }, index = { kind: "basemap-index", v: 1, attribution: MAP_ATTRIBUTION, areas: [...old.filter((a) => !replaced.includes(a)), area] };
       await state.store.saveBasemap(index, Object.fromEntries(ids.map((k, i) => [k, res.chunks[i]])), replaced.flatMap((a) => a.items || [])), basemapLoad = null;
-      let c = res.counts, note = `Read ${c.lines.toLocaleString("en-GB")} streets, paths, rail lines and rivers, ${c.fills.toLocaleString("en-GB")} parks, woods and lakes, and ${c.labels.toLocaleString("en-GB")} names.${replaced.length ? " It replaces the older map of the same area." : ""} ${state.store.kind === "cloud" ? "Saved to your private storage." : "This view cannot save, so the map lasts until you close the page."}`;
+      let c = res.counts, note = `Read ${c.lines.toLocaleString("en-GB")} streets, paths, rail lines and rivers, ${c.fills.toLocaleString("en-GB")} parks, woods and lakes, and ${c.labels.toLocaleString("en-GB")} names.${replaced.length ? " It replaces the older map of the same area." : ""} ${storageWords(state.store).saved || "This view cannot save, so the map lasts until you close the page."}`;
       update({ basemapIndex: index, basemap: null, mapRequest: null, flash: { title: "Map added", text: note, target: "map" } });
       try {
         localStorage.removeItem("gt2.mapRequest");
       } catch {
       }
       return render(), { counts: c, km2: res.bbox ? areaKm2(res.bbox) : 0, replaced: replaced.length };
+    },
+    /**
+     * Standalone build: fetch a map download straight from OpenStreetMap's data
+     * service and add it (the artifact cannot fetch, so there it is a link).
+     */
+    async fetchMap(d) {
+      actions.noteMapRequest(d.areas);
+      let res;
+      try {
+        res = await fetch(d.url, { headers: { Accept: "application/json" } });
+      } catch {
+        throw Object.assign(new Error("OpenStreetMap's data service could not be reached. Check the connection and try again, or download the file with the link and add it."), { code: "offline" });
+      }
+      if (!res.ok) {
+        let busy = res.status === 429 || res.status === 504;
+        throw Object.assign(new Error(busy ? "OpenStreetMap's data service is busy. Try again in a few minutes." : `OpenStreetMap's data service answered ${res.status}. Try again later.`), { code: "server_error" });
+      }
+      let text = await res.text();
+      return actions.addMapFile({ name: "openstreetmap.json", text: async () => text });
     },
     async removeMap() {
       let index = state.basemapIndex;
@@ -5312,7 +5584,7 @@ Last 90 days: ${JSON.stringify(last90).slice(0, 6e3)}`;
     auto && status === "ready" && due && Date.now() - lastAutoSync > AUTO_SYNC_MS && actions.syncDrive({ auto: !0 });
   }
   document.addEventListener("visibilitychange", () => {
-    document.visibilityState === "visible" && !state.loading && state.runtime && checkDrive({ auto: !0 });
+    document.visibilityState === "visible" && !state.loading && state.runtime && !!1 && checkDrive({ auto: !0 });
   });
   var saving = Promise.resolve();
   function persist(tracks, diag, opts) {
@@ -5321,12 +5593,12 @@ Last 90 days: ${JSON.stringify(last90).slice(0, 6e3)}`;
     }), run;
   }
   async function persistNow(tracks, diag, { quiet = !1 } = {}) {
-    if (state.store.kind !== "cloud") return { error: null };
+    if (!state.store.persistent) return { error: null };
     setBusy("Saving", { done: 0, total: 1 });
     try {
       let res = await state.store.save(state.ds, state.meta, { tracks, onProgress: (p) => setBusy("Saving", p) });
       return diag && await state.store.saveDiag(diag).catch(() => {
-      }), res.error?.code === "quota_exceeded" ? toast("Storage is full: some routes stay only in this session. Summaries are saved.", 6e3) : res.error ? toast(`Some data was not saved (${res.error.code || "error"}). It is still shown; try importing again later.`, 6e3) : quiet || toast("Saved to your private storage."), res;
+      }), res.error?.code === "quota_exceeded" ? toast("Storage is full: some routes stay only in this session. Summaries are saved.", 6e3) : res.error ? toast(`Some data was not saved (${res.error.code || "error"}). It is still shown; try importing again later.`, 6e3) : quiet || toast(storageWords(state.store).saved), res;
     } catch (e) {
       return toast(`Saving failed (${e?.code || "error"}). Your data is shown but not stored yet.`, 6e3), { error: e || { code: "error" } };
     } finally {
@@ -5425,6 +5697,8 @@ Last 90 days: ${JSON.stringify(last90).slice(0, 6e3)}`;
       isSample: state.isSample,
       runtime: state.runtime,
       store: state.store,
+      standalone: !1,
+      native: !!nativeBridge(),
       param: state.param,
       drive: state.drive,
       syncIndex: state.syncIndex,
@@ -5455,9 +5729,22 @@ Last 90 days: ${JSON.stringify(last90).slice(0, 6e3)}`;
     let res = await state.importer.sample(todayKey()), tracks = res.dataset.tracks || {};
     res.dataset.tracks = {}, update({ ds: res.dataset, isSample: !0, tracks });
   }
+  async function openStore(runtime) {
+    if (!1)
+      try {
+        let store = new LocalStore(await idbKv());
+        return requestPersistence(), store;
+      } catch (e) {
+        return console.warn("IndexedDB unavailable", e), new MemoryStore();
+      }
+    return runtime.db && runtime.uid ? new CloudStore(runtime.db, runtime.uid) : new MemoryStore();
+  }
+  function adaptPage() {
+    !1;
+  }
   async function boot() {
-    update(parseHash()), render();
-    let runtime = await getRuntime(), store = runtime.db && runtime.uid ? new CloudStore(runtime.db, runtime.uid) : new MemoryStore(), importer = new Importer();
+    adaptPage(), update(parseHash()), render();
+    let runtime = await getRuntime(), store = await openStore(runtime), importer = new Importer();
     update({ runtime, store, importer });
     let loaded = null;
     try {

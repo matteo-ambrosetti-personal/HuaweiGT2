@@ -1,6 +1,14 @@
 # GT 2 Logbook
 
-A personal dashboard for a **Huawei Watch GT 2**, published as a private claude.ai Artifact. It covers:
+A personal dashboard for a **Huawei Watch GT 2**. The same page ships three ways:
+
+| Form | Where | Storage | Extras |
+|---|---|---|---|
+| **claude.ai Artifact** | Private artifact on claude.ai | The artifact's private per-user storage | Ask Claude, Google Drive (Health Sync) sync, intervals.icu bridge |
+| **Web app** | [light-through-the-mirror.com/lab/gt2-logbook/](https://light-through-the-mirror.com/lab/gt2-logbook/) (signed-in accounts) | IndexedDB in your browser, on that device | Installable (PWA), works offline |
+| **Android app** | `GT2-Logbook.apk`, from the bench page on the same site | Inside the app, on the phone | No account, no network except map downloads |
+
+The web and Android versions are described in [docs/standalone.md](docs/standalone.md). The dashboard covers:
 - **Activity:** steps, distance and calories.
 - **Workouts:** GPS routes on a map you can zoom and hover (with an OpenStreetMap background of streets, paths, parks and water once you add it), km splits, best efforts, heart-rate zones, weekly distance, and the watch's training rating (training effect, load, recovery time, ground contact).
 - **Sleep:** sleep stages.
@@ -39,16 +47,23 @@ Huawei offers no free API for personal use, so data gets in three ways:
 
 Before the first import the page shows clearly labelled **sample data** generated in the browser.
 
+The web and Android apps work the same way, minus the claude.ai-only parts: no Ask Claude and no automatic sync. Add Health Sync's CSV, GPX and TCX files by hand under **Data → Add individual files**, and download the map with one button.
+
 ## Development
 
 ```sh
 npm install
-npm test            # unit tests (parsers, merge rules, statistics, GPX/TCX, Drive sync against a fake connector)
-npm run fixture     # synthetic AES-encrypted export and OpenStreetMap download → test/fixtures/out/ (password test1234)
-npm run build       # → dist/gt2-logbook.html (the published artifact)
-npm run test:e2e    # Chromium: imports the fixture, visits every tab, syncs from a fake Drive, saves screenshots/
+npm test               # unit tests (parsers, merge rules, statistics, GPX/TCX, Drive sync against a fake connector, IndexedDB store)
+npm run fixture        # synthetic AES-encrypted export and OpenStreetMap download → test/fixtures/out/ (password test1234)
+npm run build          # → dist/gt2-logbook.html (the published artifact) and dist/web/ (the standalone web app)
+npm run build:android  # → dist/android/GT2-Logbook.apk (needs dist/web; tools listed in docs/standalone.md)
+npm run test:e2e       # Chromium: imports the fixture, visits every tab, syncs from a fake Drive, saves screenshots/
+npm run test:e2e:web   # Chromium: the standalone build — storage across reloads, offline, downloads, the app's save bridge
+npm run publish:site -- ../light-through-the-mirror   # copy dist/web and the APK into the website repository
 npm run lint
 ```
+
+In this environment Playwright's Chromium lives outside its default path: prefix the e2e commands with `CHROMIUM_PATH=/opt/pw-browsers/chromium`.
 
 | Path | Contents |
 |---|---|
@@ -56,8 +71,11 @@ npm run lint
 | `src/lib/huawei/` | Export parsers (format notes: [docs/huawei-export-format.md](docs/huawei-export-format.md)) |
 | `src/lib/model.js` | The normalised dataset and source precedence (export > intervals.icu > Health Sync; for steps and heart rate the more complete day wins) |
 | `src/app/` | The page: storage on the artifact `db`, importer, views, d3 charts, Ask Claude, exports |
+| `src/app/platform.js`, `local-store.js`, `downloads.js`, `src/sw.js` | The standalone build: what differs outside claude.ai, IndexedDB storage, file saving, the offline service worker |
+| `android/` | The Android app: a WebView around `dist/web`, with a file picker and a save bridge |
+| `assets/icons/` | App icons, drawn by `npm run icons` |
 | `src/app/sync-drive.js` | Health Sync → Google Drive sync (file index, change detection, per-minute merge) |
 | `src/lib/basemap.js`, `src/app/map-layer.js` | The OpenStreetMap background: download link, file conversion, drawing ([docs/map-data.md](docs/map-data.md)) |
 | `bridge/` | The GT2 Bridge Cloudflare Worker (an OAuth-protected MCP connector for intervals.icu) |
 
-d3 7.9.0 and zip.js 2.8.61 load from pinned CDN URLs at runtime. Everything else is inlined by `scripts/build.mjs`.
+In the artifact, d3 7.9.0 and zip.js 2.8.61 load from pinned CDN URLs at runtime and everything else is inlined by `scripts/build.mjs`. The standalone build loads nothing from elsewhere: it inlines both libraries and serves its fonts (Archivo and IBM Plex Sans, OFL, from Fontsource) beside the page.

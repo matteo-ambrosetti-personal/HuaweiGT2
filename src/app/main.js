@@ -3,6 +3,8 @@
 import { state, update, settings, saveFilter } from './state.js';
 import { getRuntime } from './runtime.js';
 import { CloudStore, MemoryStore, defaultMeta } from './store.js';
+import { LocalStore, idbKv, requestPersistence } from './local-store.js';
+import { STANDALONE, nativeBridge, storageWords } from './platform.js';
 import { Importer } from './importer.js';
 import { h, clear, toast } from './ui.js';
 import { emptyDataset, mergeDataset, isEmpty, datasetRange, SOURCE_LABELS, workoutList } from '../lib/model.js';
@@ -35,6 +37,8 @@ const VIEWS = {
   ask: renderAsk,
   data: renderData,
 };
+// Ask Claude needs the artifact runtime: the standalone build leaves it out.
+if (STANDALONE) delete VIEWS.ask;
 const FILTERED = new Set(['overview', 'activity', 'workouts', 'sleep', 'heart']);
 const $ = (id) => document.getElementById(id);
 
@@ -99,7 +103,7 @@ const actions = {
     const trackCache = state.isSample ? {} : state.tracks;
     Object.assign(trackCache, tracks);
     const c = res.diag.counts;
-    const summary = `Read ${c.workouts} workouts, ${c.days} days and ${c.nights} nights${range?.from ? ` from ${fmtDate(range.from)} to ${fmtDate(range.to)}` : ''}.${res.diag.parseErrors ? ` ${res.diag.parseErrors} unreadable records were skipped.` : ''} ${state.store.kind === 'cloud' ? 'Saving to your private storage in the background.' : 'This view cannot save, so the data lasts until you close the page.'}`;
+    const summary = `Read ${c.workouts} workouts, ${c.days} days and ${c.nights} nights${range?.from ? ` from ${fmtDate(range.from)} to ${fmtDate(range.to)}` : ''}.${res.diag.parseErrors ? ` ${res.diag.parseErrors} unreadable records were skipped.` : ''} ${storageWords(state.store).saving || 'This view cannot save, so the data lasts until you close the page.'}`;
     update({ ds: base, meta, isSample: false, tracks: trackCache, diag: { ...res.diag, at: new Date().toISOString() }, flash: { title: 'Import complete', text: summary } });
     render();
     persist(tracks, res.diag);
@@ -293,7 +297,7 @@ const actions = {
     await state.store.saveBasemap(index, Object.fromEntries(ids.map((k, i) => [k, res.chunks[i]])), replaced.flatMap((a) => a.items || []));
     basemapLoad = null;
     const c = res.counts;
-    const note = `Read ${c.lines.toLocaleString('en-GB')} streets, paths, rail lines and rivers, ${c.fills.toLocaleString('en-GB')} parks, woods and lakes, and ${c.labels.toLocaleString('en-GB')} names.${replaced.length ? ' It replaces the older map of the same area.' : ''} ${state.store.kind === 'cloud' ? 'Saved to your private storage.' : 'This view cannot save, so the map lasts until you close the page.'}`;
+    const note = `Read ${c.lines.toLocaleString('en-GB')} streets, paths, rail lines and rivers, ${c.fills.toLocaleString('en-GB')} parks, woods and lakes, and ${c.labels.toLocaleString('en-GB')} names.${replaced.length ? ' It replaces the older map of the same area.' : ''} ${storageWords(state.store).saved || 'This view cannot save, so the map lasts until you close the page.'}`;
     update({ basemapIndex: index, basemap: null, mapRequest: null, flash: { title: 'Map added', text: note, target: 'map' } });
     try {
       localStorage.removeItem('gt2.mapRequest');
@@ -302,6 +306,28 @@ const actions = {
     }
     render();
     return { counts: c, km2: res.bbox ? areaKm2(res.bbox) : 0, replaced: replaced.length };
+  },
+
+  /**
+   * Standalone build: fetch a map download straight from OpenStreetMap's data
+   * service and add it (the artifact cannot fetch, so there it is a link).
+   */
+  async fetchMap(d) {
+    actions.noteMapRequest(d.areas);
+    let res;
+    try {
+      res = await fetch(d.url, { headers: { Accept: 'application/json' } });
+    } catch {
+      throw Object.assign(new Error("OpenStreetMap's data service could not be reached. Check the connection and try again, or download the file with the link and add it."), { code: 'offline' });
+    }
+    if (!res.ok) {
+      const busy = res.status === 429 || res.status === 504;
+      throw Object.assign(new Error(busy
+        ? "OpenStreetMap's data service is busy. Try again in a few minutes."
+        : `OpenStreetMap's data service answered ${res.status}. Try again later.`), { code: 'server_error' });
+    }
+    const text = await res.text();
+    return actions.addMapFile({ name: 'openstreetmap.json', text: async () => text });
   },
 
   async removeMap() {
@@ -412,7 +438,7 @@ async function checkDrive({ auto = false } = {}) {
 }
 
 document.addEventListener('visibilitychange', () => {
-  if (document.visibilityState === 'visible' && !state.loading && state.runtime) checkDrive({ auto: true });
+  if (document.visibilityState === 'visible' && !state.loading && state.runtime && !STANDALONE) checkDrive({ auto: true });
 });
 
 // ------------------------------------------------------------------ saving
@@ -427,14 +453,14 @@ function persist(tracks, diag, opts) {
 }
 
 async function persistNow(tracks, diag, { quiet = false } = {}) {
-  if (state.store.kind !== 'cloud') return { error: null };
+  if (!state.store.persistent) return { error: null };
   setBusy('Saving', { done: 0, total: 1 });
   try {
     const res = await state.store.save(state.ds, state.meta, { tracks, onProgress: (p) => setBusy('Saving', p) });
     if (diag) await state.store.saveDiag(diag).catch(() => {});
     if (res.error?.code === 'quota_exceeded') toast('Storage is full: some routes stay only in this session. Summaries are saved.', 6000);
     else if (res.error) toast(`Some data was not saved (${res.error.code || 'error'}). It is still shown; try importing again later.`, 6000);
-    else if (!quiet) toast('Saved to your private storage.');
+    else if (!quiet) toast(storageWords(state.store).saved);
     return res;
   } catch (e) {
     toast(`Saving failed (${e?.code || 'error'}). Your data is shown but not stored yet.`, 6000);
@@ -553,6 +579,8 @@ function viewCtx() {
     isSample: state.isSample,
     runtime: state.runtime,
     store: state.store,
+    standalone: STANDALONE,
+    native: Boolean(nativeBridge()),
     param: state.param,
     drive: state.drive,
     syncIndex: state.syncIndex,
@@ -592,11 +620,40 @@ async function loadSample() {
   update({ ds: res.dataset, isSample: true, tracks });
 }
 
+/** The store for this build: IndexedDB when standalone, the artifact db otherwise. */
+async function openStore(runtime) {
+  if (STANDALONE) {
+    try {
+      const store = new LocalStore(await idbKv());
+      requestPersistence();
+      return store;
+    } catch (e) {
+      console.warn('IndexedDB unavailable', e);
+      return new MemoryStore();
+    }
+  }
+  return runtime.db && runtime.uid ? new CloudStore(runtime.db, runtime.uid) : new MemoryStore();
+}
+
+/** Standalone build: drop what only claude.ai can do, and say where the data lives. */
+function adaptPage() {
+  if (!STANDALONE) return;
+  document.querySelector('#tabs [data-route="ask"]')?.remove();
+  $('foot').textContent = nativeBridge()
+    ? 'Your data stays in this app, on this phone. Charts are drawn here; nothing is uploaded.'
+    : 'Your data stays in this browser, on this device. Charts are drawn here; nothing is uploaded.';
+  // Offline shell for the installable web app. The Android app bundles its files instead.
+  if (!nativeBridge() && 'serviceWorker' in navigator && /^https?:$/.test(location.protocol)) {
+    navigator.serviceWorker.register('./sw.js').catch(() => {});
+  }
+}
+
 async function boot() {
+  adaptPage();
   update(parseHash());
   render();
   const runtime = await getRuntime();
-  let store = runtime.db && runtime.uid ? new CloudStore(runtime.db, runtime.uid) : new MemoryStore();
+  let store = await openStore(runtime);
   const importer = new Importer();
   update({ runtime, store, importer });
   let loaded = null;
@@ -614,7 +671,7 @@ async function boot() {
   else update({ ds: loaded.ds, isSample: false });
   update({ loading: false });
   render();
-  await checkDrive({ auto: true });
+  if (!STANDALONE) await checkDrive({ auto: true });
 }
 
 boot().catch((err) => {

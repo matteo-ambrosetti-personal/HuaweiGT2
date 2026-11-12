@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">GT 2 Logbook</string>
+    <string name="no_picker">No app on this phone can pick files.</string>
+</resources>

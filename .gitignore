@@ -12,3 +12,14 @@ screenshots/
 *.zip
 exports/
 HUAWEI_HEALTH_*/
+
+# Standalone and Android builds (published to light-through-the-mirror.com by `npm run publish:site`)
+dist/web/
+dist/android/
+build/
+
+# The Android signing key is never committed: this repository is public
+android/release.keystore
+android/release.properties
+*.keystore
+*.jks
