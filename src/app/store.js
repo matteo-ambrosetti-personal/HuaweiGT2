@@ -1,6 +1,7 @@
 // Persistence. CloudStore keeps everything in the artifact's db under the
 // viewer's private subtree data/users/<uid>/ (invisible to other viewers).
-// MemoryStore is the fallback when db is unavailable (local copy, signed out).
+// LocalStore (local-store.js) keeps it in IndexedDB in the standalone build.
+// MemoryStore is the fallback when neither is available (local copy, signed out).
 //
 // Layout: meta · diag · hsync (Drive sync index) · basemap (map index) ·
 // days-YYYY-MM · wk-YYYY-MM · sleep-YYYY-MM, plus tracks/items/<workoutId> and
@@ -136,6 +137,7 @@ export class CloudStore {
     this.db = db;
     this.base = `data/users/${uid}`;
     this.kind = 'cloud';
+    this.persistent = true;
   }
 
   async load() {
@@ -300,6 +302,7 @@ export class CloudStore {
 export class MemoryStore {
   constructor() {
     this.kind = 'memory';
+    this.persistent = false;
     this.state = null;
     this.trackStore = {};
     this.mapStore = {};

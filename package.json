@@ -1,17 +1,25 @@
 {
   "name": "gt2-logbook",
-  "version": "0.1.0",
+  "version": "1.0.0",
   "private": true,
-  "description": "A claude.ai Artifact dashboard for Huawei Watch GT 2 data (privacy export, Health Sync via Google Drive, intervals.icu bridge).",
+  "description": "Huawei Watch GT 2 dashboard: a claude.ai Artifact (privacy export, Health Sync via Google Drive, intervals.icu bridge), a standalone web app and an Android app.",
   "type": "module",
   "scripts": {
     "build": "node scripts/build.mjs",
+    "build:artifact": "node scripts/build.mjs artifact",
+    "build:web": "node scripts/build.mjs web",
+    "build:android": "node scripts/build-android.mjs",
+    "icons": "node scripts/make-icons.mjs",
+    "publish:site": "node scripts/publish-site.mjs",
     "test": "node --test \"test/*.test.mjs\"",
     "fixture": "node scripts/make-fixture.mjs",
     "test:e2e": "node test/e2e/run.mjs",
+    "test:e2e:web": "node test/e2e/standalone.mjs",
     "lint": "eslint src scripts test"
   },
   "devDependencies": {
+    "@fontsource-variable/archivo": "5.3.0",
+    "@fontsource/ibm-plex-sans": "5.3.0",
     "@zip.js/zip.js": "2.8.61",
     "d3": "7.9.0",
     "esbuild": "0.28.2",

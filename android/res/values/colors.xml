@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- The page background in light mode, so nothing flashes before it paints. -->
+    <color name="bg">#f4f6f7</color>
+    <color name="icon_bg">#111c24</color>
+</resources>
